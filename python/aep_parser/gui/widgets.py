@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint, QEvent, QTimer
+from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPolygon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QLabel, QStyle, QStyledItemDelegate,
+    QHeaderView, QInputDialog, QLabel, QMenu, QStyle, QStyledItemDelegate,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -259,7 +259,6 @@ class CompWidget(QWidget):
         self.comp = comp
         self._assets = assets or {}
         self._tools_project = tools_project
-        self._editing_item = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -291,7 +290,6 @@ class CompWidget(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setExpandsOnDoubleClick(False)
-        self.tree.setEditTriggers(QAbstractItemView.EditKeyPressed)
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["#", "Layer", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
@@ -314,8 +312,8 @@ class CompWidget(QWidget):
         self.tree.setItemDelegateForColumn(3, kf_delegate)
 
         self.tree.itemDoubleClicked.connect(self._on_double_click)
-        self.tree.itemChanged.connect(self._on_item_changed)
-        self.tree.installEventFilter(self)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
 
         build_layer_tree(self.tree, c.get("layers", []), in_t, out_t,
                          assets=self._assets)
@@ -325,75 +323,79 @@ class CompWidget(QWidget):
     def _writable(self) -> bool:
         return self._tools_project is not None and self._tools_project.writable
 
-    def _start_layer_edit(self, item: QTreeWidgetItem):
-        """Begin inline editing of a layer name."""
-        if not self._writable:
-            return
-        if item.data(0, ROLE_NODE_TYPE) != "layer":
-            return
-        self._editing_item = item
-        item.setFlags(item.flags() | Qt.ItemIsEditable)
-        QTimer.singleShot(0, lambda: self.tree.editItem(item, 1))
-
-    def eventFilter(self, obj, event):
-        if obj is self.tree and event.type() == QEvent.KeyPress:
-            if event.key() == Qt.Key_F2:
-                item = self.tree.currentItem()
-                if item and item.data(0, ROLE_NODE_TYPE) == "layer":
-                    self._start_layer_edit(item)
-                    return True
-        return super().eventFilter(obj, event)
-
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
-        # Pre-comp navigation takes priority
+        """Double-click navigates into pre-comps only."""
         asset_id = item.data(0, ROLE_ASSET_ID)
         if asset_id is not None:
             self.precomp_requested.emit(asset_id)
-            return
-        # Double-click col 1 on a layer → start rename
-        if col == 1 and item.data(0, ROLE_NODE_TYPE) == "layer":
-            self._start_layer_edit(item)
-            return
-        # Double-click col 2 on a property → start value edit
-        if col == 2 and self._writable and item.data(0, ROLE_MATCH_PATH):
-            self._editing_item = item
-            item.setFlags(item.flags() | Qt.ItemIsEditable)
-            QTimer.singleShot(0, lambda: self.tree.editItem(item, 2))
 
-    def _on_item_changed(self, item: QTreeWidgetItem, col: int):
-        if self._editing_item is not item:
+    def _on_context_menu(self, pos: QPoint):
+        item = self.tree.itemAt(pos)
+        if item is None:
             return
-        self._editing_item = None
-        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
-        if col == 1:
-            # Layer name edit
-            new_name = item.text(1).strip()
-            layer_id = item.data(0, ROLE_LAYER_ID)
-            comp_id = self.comp.get("id")
-            if self._writable and layer_id is not None and comp_id is not None:
-                self._tools_project.change_layer_name(comp_id, layer_id, new_name)
+        menu = QMenu(self.tree)
+        node_type = item.data(0, ROLE_NODE_TYPE)
 
-        elif col == 2:
-            # Property value edit
-            match_path = item.data(0, ROLE_MATCH_PATH)
-            if not match_path:
-                return
-            text = item.text(2).strip()
-            new_value = _parse_value_text(text)
-            if new_value is None:
-                return
-            # Walk up to find the layer item
-            layer_item = item
-            while layer_item and layer_item.data(0, ROLE_NODE_TYPE) != "layer":
-                layer_item = layer_item.parent()
-            if not layer_item:
-                return
-            layer_id = layer_item.data(0, ROLE_LAYER_ID)
-            comp_id = self.comp.get("id")
-            if self._writable and layer_id is not None and comp_id is not None:
-                self._tools_project.change_property_value(
-                    comp_id, layer_id, match_path, new_value)
+        # Layer rename
+        if node_type == "layer" and self._writable:
+            menu.addAction("Rename Layer", lambda: self._rename_layer(item))
+
+        # Property value edit
+        match_path = item.data(0, ROLE_MATCH_PATH)
+        if match_path and self._writable:
+            menu.addAction("Edit Value", lambda: self._edit_property(item))
+
+        # Pre-comp navigation
+        asset_id = item.data(0, ROLE_ASSET_ID)
+        if asset_id is not None:
+            menu.addAction("Open Pre-comp",
+                           lambda: self.precomp_requested.emit(asset_id))
+
+        if not menu.isEmpty():
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _rename_layer(self, item: QTreeWidgetItem):
+        old_name = item.text(1)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Layer", "Layer name:", text=old_name)
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        self.tree.blockSignals(True)
+        item.setText(1, new_name)
+        self.tree.blockSignals(False)
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_name(comp_id, layer_id, new_name)
+
+    def _edit_property(self, item: QTreeWidgetItem):
+        match_path = item.data(0, ROLE_MATCH_PATH)
+        if not match_path:
+            return
+        old_text = item.text(2)
+        new_text, ok = QInputDialog.getText(
+            self, "Edit Value", f"{item.text(0)}:", text=old_text)
+        if not ok:
+            return
+        new_value = _parse_value_text(new_text)
+        if new_value is None:
+            return
+        # Walk up to find the layer item
+        layer_item = item
+        while layer_item and layer_item.data(0, ROLE_NODE_TYPE) != "layer":
+            layer_item = layer_item.parent()
+        if not layer_item:
+            return
+        layer_id = layer_item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        self.tree.blockSignals(True)
+        item.setText(2, new_text)
+        self.tree.blockSignals(False)
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_property_value(
+                comp_id, layer_id, match_path, new_value)
 
 
 # -- Project Panel --
