@@ -56,13 +56,13 @@ _TDB4_SPATIAL_2 = bytes.fromhex(
     "000000000000000000000000000000"
 )
 
-# Match name → (components, tdb4_template, tdum, tduM)
-_PROPERTY_TEMPLATES: dict[str, tuple[int, bytes, float, float]] = {
-    "ADBE Opacity":      (1, _TDB4_SCALAR_1, 0.0, 100.0),
-    "ADBE Rotate Z":     (1, _TDB4_SCALAR_1, 0.0, 0.0),
-    "ADBE Scale":        (3, _TDB4_SCALAR_3, 0.0, 0.0),
-    "ADBE Anchor Point": (2, _TDB4_SPATIAL_2, 0.0, 0.0),
-    "ADBE Position":     (2, _TDB4_SPATIAL_2, 0.0, 0.0),
+# Match name → (components, spatial, tdb4_template, tdum, tduM)
+_PROPERTY_TEMPLATES: dict[str, tuple[int, bool, bytes, float, float]] = {
+    "ADBE Opacity":      (1, False, _TDB4_SCALAR_1, 0.0, 100.0),
+    "ADBE Rotate Z":     (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Scale":        (3, False, _TDB4_SCALAR_3, 0.0, 0.0),
+    "ADBE Anchor Point": (2, True,  _TDB4_SPATIAL_2, 0.0, 0.0),
+    "ADBE Position":     (2, True,  _TDB4_SPATIAL_2, 0.0, 0.0),
 }
 
 
@@ -359,7 +359,7 @@ def _create_tdbs_chunk(match_name: str, value: list[float],
     if template is None:
         return None
 
-    components, tdb4_data, tdum_val, tduM_val = template
+    components, is_spatial, tdb4_data, tdum_val, tduM_val = template
     fmt = ">" if big_endian else "<"
 
     # tdsb: flags (visible, not split)
@@ -372,18 +372,19 @@ def _create_tdbs_chunk(match_name: str, value: list[float],
     # tdb4: property metadata
     tdb4 = Chunk("tdb4", len(tdb4_data), tdb4_data)
 
-    # cdat: value data — components * 5 float64s (value + 4 tangent/influence slots)
-    cdat_floats = list(value) + [0.0] * (components * 5 - len(value))
-    cdat_data = struct.pack(f"{fmt}{'d' * len(cdat_floats)}", *cdat_floats)
+    # cdat: value + tangent/velocity slots
+    # Spatial properties: components*3 + 3 float64s (value, spatial_in, spatial_out, temporal)
+    # Non-spatial:        components*5 float64s (value, ease_in, ease_out, influence_in, influence_out)
+    cdat_count = components * 3 + 3 if is_spatial else components * 5
+    cdat_floats = list(value) + [0.0] * (cdat_count - len(value))
+    cdat_data = struct.pack(f"{fmt}{'d' * cdat_count}", *cdat_floats)
     cdat = Chunk("cdat", len(cdat_data), cdat_data)
 
-    children = [tdsb, tdsn, tdb4, cdat]
+    # tdum/tduM: min/max bounds (always present in real AEP files)
+    tdum = Chunk("tdum", 8, struct.pack(f"{fmt}d", tdum_val))
+    tduM = Chunk("tduM", 8, struct.pack(f"{fmt}d", tduM_val))
 
-    # tdum/tduM: min/max bounds (only if non-zero)
-    if tdum_val != 0.0 or tduM_val != 0.0:
-        tdum = Chunk("tdum", 8, struct.pack(f"{fmt}d", tdum_val))
-        tduM = Chunk("tduM", 8, struct.pack(f"{fmt}d", tduM_val))
-        children.extend([tdum, tduM])
+    children = [tdsb, tdsn, tdb4, cdat, tdum, tduM]
 
     tdbs_cl = ChunkList("tdbs", children)
     # Calculate total size: type(4) + sum of child (header(4) + size(4) + data + padding)
@@ -477,12 +478,13 @@ def set_property_value(root: Chunk, comp_id: int, layer_id: int,
     if cdat is None:
         return False
 
-    # Write new float64 values into cdat
+    # Patch value floats at the start of cdat, preserving tangent/velocity data
     fmt = ">" if big_endian else "<"
     fmt += "d" * len(new_value)
-    new_data = struct.pack(fmt, *new_value)
-    cdat.data = new_data
-    cdat.length = len(new_data)
+    packed = struct.pack(fmt, *new_value)
+    old_data = bytearray(cdat.data)
+    old_data[:len(packed)] = packed
+    cdat.data = bytes(old_data)
     return True
 
 
@@ -586,7 +588,8 @@ def set_keyframe_value(root: Chunk, comp_id: int, layer_id: int,
 # High-level Save
 
 
-def save_aep(root: Chunk, big_endian: bool, path: str | Path) -> None:
+def save_aep(root: Chunk, big_endian: bool, path: str | Path,
+             trailing_data: bytes = b"") -> None:
     """Serialize the chunk tree and write to a file."""
     data = serialize_chunk_tree(root, big_endian)
-    Path(path).write_bytes(data)
+    Path(path).write_bytes(data + trailing_data)
