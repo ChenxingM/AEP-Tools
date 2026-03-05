@@ -142,14 +142,20 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
     for p in props:
         mn = p.get("matchName", "")
         val = p.get("value")
-        if val is None:
-            continue
 
         cur_path = match_path + [mn] if mn else match_path
         item = QTreeWidgetItem()
         display = _display_name(mn, val)
         item.setText(0, display)
         item.setToolTip(0, mn)
+
+        if val is None:
+            item.setData(0, ROLE_NODE_TYPE, "property")
+            item.setData(0, ROLE_MATCH_PATH, cur_path)
+            item.setForeground(0, COLOR_TEXT_DIM)
+            item.setText(2, "")
+            parent.addChild(item)
+            continue
 
         if isinstance(val, dict):
             # PropertyGroup
