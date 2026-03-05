@@ -13,7 +13,7 @@ from .theme import (
     ROLE_KEYFRAMES, ROLE_NODE_TYPE,
     COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
-    fmt_val, get_color_swatch, get_keyframes,
+    fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
 )
 
 
@@ -91,12 +91,15 @@ def _display_name(match_name: str, value: dict | None = None) -> str:
 
 
 def build_layer_tree(tree: QTreeWidget, layers: list[dict],
-                     comp_in: float, comp_out: float):
+                     comp_in: float, comp_out: float,
+                     assets: dict | None = None):
     """Populate tree widget with layers and their property hierarchies."""
+    if assets is None:
+        assets = {}
     for i, layer in enumerate(layers, 1):
         layer_item = QTreeWidgetItem()
         name = layer.get("name", "(unnamed)")
-        ltype = layer.get("type", "asset")
+        ltype = resolve_layer_visual_type(layer, assets)
         label, color = LAYER_TYPE_LABELS.get(ltype, ("?", "#cccccc"))
 
         layer_item.setText(0, f"{i}  {name}")
@@ -215,9 +218,10 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
 class CompWidget(QWidget):
     """Widget showing a single composition's layers and properties."""
 
-    def __init__(self, comp: dict, parent=None):
+    def __init__(self, comp: dict, parent=None, *, assets: dict | None = None):
         super().__init__(parent)
         self.comp = comp
+        self._assets = assets or {}
         self._setup_ui()
 
     def _setup_ui(self):
@@ -267,7 +271,8 @@ class CompWidget(QWidget):
         kf_delegate.set_time_range(in_t, out_t)
         self.tree.setItemDelegateForColumn(2, kf_delegate)
 
-        build_layer_tree(self.tree, c.get("layers", []), in_t, out_t)
+        build_layer_tree(self.tree, c.get("layers", []), in_t, out_t,
+                         assets=self._assets)
         layout.addWidget(self.tree)
 
 

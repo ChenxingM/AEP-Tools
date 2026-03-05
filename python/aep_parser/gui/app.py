@@ -165,9 +165,10 @@ class MainWindow(QMainWindow):
 
         self.project_panel.load_project(data)
 
+        assets = data.get("assets", {})
         comps = data.get("compositions", [])
         for comp in comps:
-            widget = CompWidget(comp)
+            widget = CompWidget(comp, assets=assets)
             name = comp.get("name", f"Comp {comp.get('id', '?')}")
             idx = self.tab_widget.addTab(widget, name)
             self._comp_tab_map[comp.get("id", 0)] = idx
