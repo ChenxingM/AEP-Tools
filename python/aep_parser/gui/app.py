@@ -169,6 +169,7 @@ class MainWindow(QMainWindow):
         comps = data.get("compositions", [])
         for comp in comps:
             widget = CompWidget(comp, assets=assets)
+            widget.precomp_requested.connect(self._switch_to_comp)
             name = comp.get("name", f"Comp {comp.get('id', '?')}")
             idx = self.tab_widget.addTab(widget, name)
             self._comp_tab_map[comp.get("id", 0)] = idx

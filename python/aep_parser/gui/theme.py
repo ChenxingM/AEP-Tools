@@ -8,6 +8,7 @@ from PySide6.QtGui import QColor
 
 ROLE_KEYFRAMES = 257  # Qt.UserRole + 1
 ROLE_NODE_TYPE = 261  # Qt.UserRole + 5
+ROLE_ASSET_ID = 262   # Qt.UserRole + 6
 
 COLOR_BG = QColor("#1e1e1e")
 COLOR_BG_ALT = QColor("#252526")

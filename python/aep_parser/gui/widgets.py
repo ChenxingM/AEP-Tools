@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import (
-    ROLE_KEYFRAMES, ROLE_NODE_TYPE,
+    ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID,
     COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
     fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
@@ -104,6 +104,8 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
 
         layer_item.setText(0, f"{i}  {name}")
         layer_item.setData(0, ROLE_NODE_TYPE, "layer")
+        if ltype == "precomp":
+            layer_item.setData(0, ROLE_ASSET_ID, layer.get("assetId"))
 
         in_t = layer.get("inTime", 0)
         out_t = layer.get("outTime", 0)
@@ -218,6 +220,8 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
 class CompWidget(QWidget):
     """Widget showing a single composition's layers and properties."""
 
+    precomp_requested = Signal(int)
+
     def __init__(self, comp: dict, parent=None, *, assets: dict | None = None):
         super().__init__(parent)
         self.comp = comp
@@ -271,9 +275,16 @@ class CompWidget(QWidget):
         kf_delegate.set_time_range(in_t, out_t)
         self.tree.setItemDelegateForColumn(2, kf_delegate)
 
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
+
         build_layer_tree(self.tree, c.get("layers", []), in_t, out_t,
                          assets=self._assets)
         layout.addWidget(self.tree)
+
+    def _on_double_click(self, item: QTreeWidgetItem, col: int):
+        asset_id = item.data(0, ROLE_ASSET_ID)
+        if asset_id is not None:
+            self.precomp_requested.emit(asset_id)
 
 
 # -- Project Panel --
