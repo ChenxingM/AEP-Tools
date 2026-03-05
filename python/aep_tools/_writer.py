@@ -13,6 +13,17 @@ from typing import Any
 from aep_parser._parser.binary_reader import BinaryReader
 from aep_parser._parser.chunk import Chunk, ChunkList
 
+try:
+    from aep_parser._core import ChunkList as _RustChunkList
+except ImportError:
+    _RustChunkList = None
+
+def _is_chunk_list(data) -> bool:
+    """Check if data is a ChunkList (Python or Rust implementation)."""
+    if isinstance(data, ChunkList):
+        return True
+    return _RustChunkList is not None and isinstance(data, _RustChunkList)
+
 
 # RIFF Serializer
 
@@ -50,7 +61,7 @@ def _write_chunk(buf: bytearray, chunk: Chunk, big_endian: bool) -> None:
     """Write a single chunk (recursively handles LIST and container types)."""
     data = chunk.data
 
-    if isinstance(data, ChunkList):
+    if _is_chunk_list(data):
         if chunk.header == "LIST":
             _write_list_chunk(buf, chunk, big_endian)
         else:
@@ -220,7 +231,7 @@ def find_property_chunk(parent_cl: ChunkList, match_name_path: list[str],
             return None
         if depth < len(match_name_path) - 1:
             # Need to go deeper — this must be a tdgp (PropertyGroup)
-            if not isinstance(found.data, ChunkList):
+            if not _is_chunk_list(found.data):
                 return None
             cl = found.data
         else:
@@ -335,7 +346,7 @@ def set_property_value(root: Chunk, comp_id: int, layer_id: int,
         return False
 
     # The prop_chunk should be a tdbs (animated property) containing a cdat
-    if not isinstance(prop_chunk.data, ChunkList):
+    if not _is_chunk_list(prop_chunk.data):
         return False
 
     prop_cl = prop_chunk.data
@@ -382,7 +393,7 @@ def set_keyframe_value(root: Chunk, comp_id: int, layer_id: int,
         return False
 
     prop_chunk = find_property_chunk(tdgp.list, match_name_path)
-    if prop_chunk is None or not isinstance(prop_chunk.data, ChunkList):
+    if prop_chunk is None or not _is_chunk_list(prop_chunk.data):
         return False
 
     prop_cl = prop_chunk.data
