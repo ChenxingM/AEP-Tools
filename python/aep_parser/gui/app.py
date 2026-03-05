@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QSplitter, QStatusBar, QTabWidget,
 )
 
-from .. import parse_aep, parse_aepx
+from aep_tools import Project as ToolsProject
 from .widgets import CompWidget, ProjectPanel
 
 
@@ -24,6 +24,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._project_data: dict | None = None
+        self._tools_project: ToolsProject | None = None
+        self._source_path: Path | None = None
         self._comp_tab_map: dict[int, int] = {}
 
         self._setup_ui()
@@ -114,30 +116,18 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            progress.setLabelText("Reading file...")
-            progress.setValue(0)
-            QApplication.processEvents()
-
-            ext = path.suffix.lower()
-            if ext == ".aepx":
-                raw = path.read_text(encoding="utf-8")
-            else:
-                raw = path.read_bytes()
-
             progress.setLabelText("Parsing...")
             progress.setValue(1)
             QApplication.processEvents()
 
-            if ext == ".aepx":
-                project = parse_aepx(raw)
-            else:
-                project = parse_aep(raw)
+            self._tools_project = ToolsProject.open(path)
+            self._source_path = path
 
             progress.setLabelText("Building UI...")
             progress.setValue(2)
             QApplication.processEvents()
 
-            self._project_data = project.to_dict()
+            self._project_data = self._tools_project._model.to_dict()
             self._display_project(path.name)
             progress.setValue(3)
         except Exception as e:
@@ -147,6 +137,8 @@ class MainWindow(QMainWindow):
     def _load_json(self, path: Path):
         self.setCursor(Qt.WaitCursor)
         try:
+            self._tools_project = None
+            self._source_path = None
             self._project_data = json.loads(path.read_text(encoding="utf-8"))
             self._display_project(path.name)
         except Exception as e:
