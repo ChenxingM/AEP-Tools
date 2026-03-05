@@ -220,10 +220,18 @@ class ProjectParser:
                 om.width = int.from_bytes(roou_data[36:38], "big" if self.big_endian else "little")
                 om.height = int.from_bytes(roou_data[40:42], "big" if self.big_endian else "little")
 
-            # Collect associated chunks: Ropt, Als2, Utf8, Utf8
+            # Collect associated chunks after Roou.
+            # Known order: Ropt, [hdrm], [Utf8 extras], Als2, Utf8, Utf8
             i += 1
             # Skip Ropt
             if i < len(children) and children[i].header == "Ropt":
+                i += 1
+            # Skip any intermediate chunks (hdrm, extra Utf8) until Als2 or next Roou
+            while i < len(children):
+                h = children[i].header
+                n = getattr(children[i], "name", "") or ""
+                if n == "Als2" or h == "Roou":
+                    break
                 i += 1
             # Als2 → output path
             if i < len(children) and children[i].name == "Als2":
