@@ -25,6 +25,11 @@ LAYER_TYPE_LABELS = {
     "camera": ("Camera", "#9cdcfe"),
     "light": ("Light", "#dcdcaa"),
     "asset": ("Asset", "#c586c0"),
+    "precomp": ("Pre-comp", "#c586c0"),
+    "footage": ("Footage", "#9a7ec7"),
+    "solid": ("Solid", "#b5cea8"),
+    "null": ("Null", "#d4d4d4"),
+    "adjustment": ("Adjustment", "#e8a624"),
 }
 
 # Match name -> human-readable display name
