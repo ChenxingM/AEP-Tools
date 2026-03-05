@@ -32,6 +32,32 @@ LAYER_TYPE_LABELS = {
     "adjustment": ("Adjustment", "#e8a624"),
 }
 
+def resolve_layer_visual_type(layer: dict, assets: dict) -> str:
+    """Return the most specific LAYER_TYPE_LABELS key for *layer*."""
+    flags = layer.get("flags", {})
+    if flags.get("isNull"):
+        return "null"
+    if flags.get("isAdjustment"):
+        return "adjustment"
+    ltype = layer.get("type", "asset")
+    if ltype != "asset":
+        return ltype
+    asset_id = layer.get("assetId")
+    if asset_id is not None:
+        asset = assets.get(asset_id) if isinstance(assets, dict) else None
+        if asset is None and isinstance(assets, list):
+            asset = next((a for a in assets if a.get("id") == asset_id), None)
+        if isinstance(asset, dict):
+            if "layers" in asset:
+                return "precomp"
+            atype = asset.get("type")
+            if atype == "solid":
+                return "solid"
+            if atype == "image":
+                return "footage"
+    return "asset"
+
+
 # Match name -> human-readable display name
 ADBE_NAMES = {
     "ADBE Transform Group": "Transform",
