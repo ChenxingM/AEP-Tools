@@ -287,6 +287,7 @@ class CompWidget(QWidget):
         self.tree.setAnimated(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
+        self.tree.setExpandsOnDoubleClick(False)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Layer", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
