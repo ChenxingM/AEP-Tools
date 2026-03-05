@@ -254,6 +254,8 @@ def fmt_val(v) -> str:
             return fmt_val(v.get("value"))
         return str(v)[:60]
     if isinstance(v, list):
+        if all(isinstance(x, (int, float)) for x in v):
+            return "(" + ", ".join(f"{x:g}" for x in v) + ")"
         return f"[{len(v)} items]"
     return str(v)[:60]
 
