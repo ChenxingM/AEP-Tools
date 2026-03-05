@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import (
-    ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID, ROLE_LAYER_ID,
+    ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID, ROLE_LAYER_ID, ROLE_MATCH_PATH,
     COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
     fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
@@ -124,21 +124,25 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
 
         props = layer.get("properties", {})
         if isinstance(props, dict) and "properties" in props:
-            _build_props(layer_item, props["properties"], comp_in, comp_out)
+            _build_props(layer_item, props["properties"], comp_in, comp_out, [])
 
         tree.addTopLevelItem(layer_item)
         layer_item.setExpanded(False)
 
 
 def _build_props(parent: QTreeWidgetItem, props: list[dict],
-                 comp_in: float, comp_out: float):
+                 comp_in: float, comp_out: float,
+                 match_path: list[str] | None = None):
     """Recursively build property tree items."""
+    if match_path is None:
+        match_path = []
     for p in props:
         mn = p.get("matchName", "")
         val = p.get("value")
         if val is None:
             continue
 
+        cur_path = match_path + [mn] if mn else match_path
         item = QTreeWidgetItem()
         display = _display_name(mn, val)
         item.setText(0, display)
@@ -156,7 +160,7 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                     item.setForeground(0, color)
                 else:
                     item.setForeground(0, COLOR_TEXT)
-                _build_props(item, val["properties"], comp_in, comp_out)
+                _build_props(item, val["properties"], comp_in, comp_out, cur_path)
 
             # EffectInstance
             elif "parameters" in val and "name" in val:
@@ -165,11 +169,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 item.setForeground(0, QColor("#dcdcaa"))
                 params = val["parameters"]
                 if isinstance(params, dict) and "properties" in params:
-                    _build_props(item, params["properties"], comp_in, comp_out)
+                    _build_props(item, params["properties"], comp_in, comp_out,
+                                 cur_path)
 
             # TextProperty
             elif "fonts" in val and "documents" in val:
                 item.setData(0, ROLE_NODE_TYPE, "property")
+                item.setData(0, ROLE_MATCH_PATH, cur_path)
                 item.setText(1, fmt_val(val))
                 kfs = get_keyframes(val.get("documents", {}))
                 if kfs:
@@ -183,11 +189,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 item.setForeground(0, QColor("#b5cea8"))
                 mask_props = val.get("properties")
                 if isinstance(mask_props, dict) and "properties" in mask_props:
-                    _build_props(item, mask_props["properties"], comp_in, comp_out)
+                    _build_props(item, mask_props["properties"], comp_in, comp_out,
+                                 cur_path)
 
             # AnimatedProperty
             elif "type" in val and "animated" in val:
                 item.setData(0, ROLE_NODE_TYPE, "property")
+                item.setData(0, ROLE_MATCH_PATH, cur_path)
                 static_val = val.get("value")
                 item.setText(1, fmt_val(static_val))
 
@@ -214,6 +222,25 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
             item.setText(1, fmt_val(val))
 
         parent.addChild(item)
+
+
+def _parse_value_text(text: str) -> list[float] | float | None:
+    """Parse a user-entered value string into a number or list of numbers."""
+    text = text.strip()
+    if not text:
+        return None
+    # Tuple form: (x, y) or (x, y, z)
+    if text.startswith("(") and text.endswith(")"):
+        inner = text[1:-1]
+        try:
+            return [float(v.strip()) for v in inner.split(",")]
+        except ValueError:
+            return None
+    # Single number
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 # -- Composition Widget --
@@ -326,24 +353,53 @@ class CompWidget(QWidget):
         # Double-click col 0 on a layer → start rename
         if col == 0 and item.data(0, ROLE_NODE_TYPE) == "layer":
             self._start_layer_edit(item)
+            return
+        # Double-click col 1 on a property → start value edit
+        if col == 1 and self._writable and item.data(0, ROLE_MATCH_PATH):
+            self._editing_item = item
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.tree.editItem(item, 1)
 
     def _on_item_changed(self, item: QTreeWidgetItem, col: int):
-        if col == 0 and self._editing_item is item:
-            self._editing_item = None
+        if self._editing_item is not item:
+            return
+        self._editing_item = None
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+        if col == 0:
+            # Layer name edit
             new_name = item.text(0).strip()
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            # Find the layer index to restore prefix
             idx = self.tree.indexOfTopLevelItem(item)
             if idx < 0:
                 return
             layer_id = item.data(0, ROLE_LAYER_ID)
             comp_id = self.comp.get("id")
-            # Restore index prefix
             self.tree.blockSignals(True)
             item.setText(0, f"{idx + 1}  {new_name}")
             self.tree.blockSignals(False)
             if self._writable and layer_id is not None and comp_id is not None:
                 self._tools_project.change_layer_name(comp_id, layer_id, new_name)
+
+        elif col == 1:
+            # Property value edit
+            match_path = item.data(0, ROLE_MATCH_PATH)
+            if not match_path:
+                return
+            text = item.text(1).strip()
+            new_value = _parse_value_text(text)
+            if new_value is None:
+                return
+            # Walk up to find the layer item
+            layer_item = item
+            while layer_item and layer_item.data(0, ROLE_NODE_TYPE) != "layer":
+                layer_item = layer_item.parent()
+            if not layer_item:
+                return
+            layer_id = layer_item.data(0, ROLE_LAYER_ID)
+            comp_id = self.comp.get("id")
+            if self._writable and layer_id is not None and comp_id is not None:
+                self._tools_project.change_property_value(
+                    comp_id, layer_id, match_path, new_value)
 
 
 # -- Project Panel --
