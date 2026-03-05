@@ -69,6 +69,12 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._save_action = QAction("Save AEP...", self)
+        self._save_action.setShortcut("Ctrl+Shift+S")
+        self._save_action.setEnabled(False)
+        self._save_action.triggered.connect(self._save_aep)
+        file_menu.addAction(self._save_action)
+
         export_action = QAction("Export JSON...", self)
         export_action.setShortcut("Ctrl+S")
         export_action.triggered.connect(self._export_json)
@@ -152,6 +158,9 @@ class MainWindow(QMainWindow):
             return
 
         self.setWindowTitle(f"AEP Viewer \u2014 {filename}")
+        self._save_action.setEnabled(
+            self._tools_project is not None and self._tools_project.writable
+        )
         self.tab_widget.clear()
         self._comp_tab_map.clear()
 
@@ -186,6 +195,19 @@ class MainWindow(QMainWindow):
         idx = self._comp_tab_map.get(comp_id)
         if idx is not None:
             self.tab_widget.setCurrentIndex(idx)
+
+    def _save_aep(self):
+        if not self._tools_project or not self._tools_project.writable:
+            return
+        default = str(self._source_path) if self._source_path else ""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save AEP", default, "After Effects Project (*.aep)")
+        if path:
+            try:
+                self._tools_project.save(path)
+                self.status.showMessage(f"  Saved to {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
 
     def _export_json(self):
         if not self._project_data:
