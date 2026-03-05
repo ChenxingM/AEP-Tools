@@ -75,6 +75,14 @@ class CompItem:
     def name(self) -> str:
         return self._model.name
 
+    @name.setter
+    def name(self, new_name: str) -> None:
+        self._model.name = new_name
+        if self._project is not None and self._project._chunk_tree is not None:
+            from ._writer import set_comp_name
+            set_comp_name(self._project._chunk_tree, self._model.id,
+                          new_name, self._project._big_endian)
+
     @property
     def width(self) -> int:
         return self._model.width

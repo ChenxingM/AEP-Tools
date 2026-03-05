@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 _property = property
 
 
-# ── Layer base class ────────────────────────────────────────────────────────
+# Layer base class
 
 
 class Layer:
@@ -54,7 +54,12 @@ class Layer:
         self._effects_list: list[Effect] | None = None
         self._masks_list: list[Mask] | None = None
 
-    # ── Identity ────────────────────────────────────────────────────────
+    # Identity
+
+    @_property
+    def id(self) -> int:
+        """Internal layer ID (used for write operations)."""
+        return self._model.id
 
     @_property
     def index(self) -> int:
@@ -65,6 +70,17 @@ class Layer:
     def name(self) -> str:
         return self._model.name
 
+    @name.setter
+    def name(self, new_name: str) -> None:
+        self._model.name = new_name
+        if self._containing_comp is not None:
+            project = getattr(self._containing_comp, '_project', None)
+            if project is not None and project._chunk_tree is not None:
+                from ._writer import set_layer_name
+                set_layer_name(project._chunk_tree,
+                               self._containing_comp.id, self._model.id,
+                               new_name, project._big_endian)
+
     @_property
     def containing_comp(self) -> CompItem | None:
         return self._containing_comp
@@ -73,7 +89,7 @@ class Layer:
     def label(self) -> int:
         return self._model.label_color
 
-    # ── Flags ───────────────────────────────────────────────────────────
+    # Flags
 
     @_property
     def enabled(self) -> bool:
@@ -91,7 +107,7 @@ class Layer:
     def locked(self) -> bool:
         return self._model.locked
 
-    # ── Timing ──────────────────────────────────────────────────────────
+    # Timing
 
     @_property
     def in_point(self) -> float:
@@ -109,7 +125,7 @@ class Layer:
     def stretch(self) -> float:
         return self._model.time_stretch
 
-    # ── Layer type flags ────────────────────────────────────────────────
+    # Layer type flags
 
     @_property
     def null_layer(self) -> bool:
@@ -165,7 +181,7 @@ class Layer:
     def collapse_transformation(self) -> bool:
         return self._model.continuously_rasterize
 
-    # ── Parent ──────────────────────────────────────────────────────────
+    # Parent
 
     @_property
     def parent(self) -> Layer | None:
@@ -176,7 +192,7 @@ class Layer:
                 return layer_wrapper
         return None
 
-    # ── Property tree ───────────────────────────────────────────────────
+    # Property tree
 
     def _ensure_children(self) -> list[tuple[str, str, Any]]:
         if self._children is not None:
@@ -187,6 +203,8 @@ class Layer:
             mn = np.match_name
             if isinstance(wrapped, (Property, PropertyGroup)):
                 dn = wrapped.name
+                wrapped._layer_ref = self
+                wrapped._match_path = [mn]
             else:
                 dn = MATCH_NAMES.get(mn, mn)
             self._children.append((mn, dn, wrapped))
@@ -215,7 +233,7 @@ class Layer:
     def __getitem__(self, name_or_index: str | int) -> Any:
         return self.__call__(name_or_index)
 
-    # ── Transform shortcuts ─────────────────────────────────────────────
+    # Transform shortcuts
 
     def _find_transform_prop(self, match_name: str) -> Property | None:
         transform_group = self.property("ADBE Transform Group")
@@ -282,7 +300,7 @@ class Layer:
     def position_z(self) -> Property | None:
         return self._find_transform_prop("ADBE Position_2")
 
-    # ── Time remap ──────────────────────────────────────────────────────
+    # Time remap
 
     @_property
     def time_remap_enabled(self) -> bool:
@@ -294,7 +312,7 @@ class Layer:
         result = self.property("ADBE Time Remapping")
         return result if isinstance(result, Property) else None
 
-    # ── Markers ─────────────────────────────────────────────────────────
+    # Markers
 
     @_property
     def marker_property(self) -> MarkerProperty | None:
@@ -303,7 +321,7 @@ class Layer:
             return MarkerProperty(result._model)
         return None
 
-    # ── Effects ─────────────────────────────────────────────────────────
+    # Effects
 
     def _ensure_effects(self) -> list[Effect]:
         if self._effects_list is not None:
@@ -337,7 +355,7 @@ class Layer:
                 return e
         return None
 
-    # ── Masks ───────────────────────────────────────────────────────────
+    # Masks
 
     def _ensure_masks(self) -> list[Mask]:
         if self._masks_list is not None:
@@ -368,7 +386,7 @@ class Layer:
         return f"{type(self).__name__}({self.name!r}, index={self.index})"
 
 
-# ── Layer subclasses ────────────────────────────────────────────────────────
+# Layer subclasses
 
 
 class AVLayer(Layer):
@@ -424,7 +442,7 @@ class LightLayer(Layer):
     pass
 
 
-# ── Factory ─────────────────────────────────────────────────────────────────
+# Factory
 
 
 def _make_layer(model: LayerModel, index: int,
@@ -444,7 +462,7 @@ def _make_layer(model: LayerModel, index: int,
     return Layer(model, index, containing_comp)
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# Helpers
 
 
 def _wrap_layer_named_property(np: NamedProperty) -> Any:

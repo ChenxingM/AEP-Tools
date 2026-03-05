@@ -94,6 +94,8 @@ class Property:
         self._model = model
         self._match_name = match_name
         self._display_name = display_name or MATCH_NAMES.get(match_name, match_name)
+        self._layer_ref: Any = None  # set by Layer/PropertyGroup for write support
+        self._match_path: list[str] = []
 
     @property
     def name(self) -> str:
@@ -111,6 +113,18 @@ class Property:
         if self._model.keyframes:
             return _convert_value(self._model.keyframes[0].value)
         return None
+
+    @value.setter
+    def value(self, new_val: Any) -> None:
+        """Set the static property value.
+
+        Accepts a float or list of floats. Updates both the in-memory model
+        and the chunk tree (if opened from a .aep file).
+        """
+        # Update model
+        self._model.value = _to_model_value(new_val)
+        # Update chunk tree
+        _sync_property_to_chunk(self)
 
     @property
     def num_keys(self) -> int:
@@ -270,6 +284,8 @@ class PropertyGroup:
         self._match_name = match_name
         self._display_name = display_name or MATCH_NAMES.get(match_name, match_name)
         self._children: list[tuple[str, str, Any]] | None = None  # (match, display, wrapped)
+        self._layer_ref: Any = None  # set by Layer for write support
+        self._match_path: list[str] = []
 
     @property
     def name(self) -> str:
@@ -292,8 +308,12 @@ class PropertyGroup:
             mn = np.match_name
             if isinstance(wrapped, PropertyGroup):
                 dn = wrapped.name
+                wrapped._layer_ref = self._layer_ref
+                wrapped._match_path = self._match_path + [mn]
             elif isinstance(wrapped, Property):
                 dn = wrapped.name
+                wrapped._layer_ref = self._layer_ref
+                wrapped._match_path = self._match_path + [mn]
             else:
                 dn = MATCH_NAMES.get(mn, mn)
             self._children.append((mn, dn, wrapped))
@@ -490,3 +510,49 @@ def _find_property_by_name(children: list[tuple[str, str, Any]], name: str) -> A
         if obj_name and isinstance(obj_name, str) and obj_name.lower() == name_lower:
             return wrapped
     return None
+
+
+# Write helpers
+
+
+def _to_model_value(val: Any) -> Any:
+    """Convert a Python value back to a model value for storage."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, list):
+        if len(val) == 2:
+            return Vector(float(val[0]), float(val[1]))
+        if len(val) == 3:
+            return Vector(float(val[0]), float(val[1]), float(val[2]))
+        if len(val) == 4:
+            return Color(float(val[0]), float(val[1]), float(val[2]), float(val[3]))
+    return val
+
+
+def _sync_property_to_chunk(prop: Property) -> None:
+    """Push a Property's new value to the chunk tree (if write context exists)."""
+    layer = prop._layer_ref
+    if layer is None or not prop._match_path:
+        return
+    comp = getattr(layer, '_containing_comp', None)
+    if comp is None:
+        return
+    project = getattr(comp, '_project', None)
+    if project is None or project._chunk_tree is None:
+        return
+
+    from ._writer import set_property_value
+    val = prop._model.value
+    if isinstance(val, (int, float)):
+        floats = [float(val)]
+    elif isinstance(val, Vector):
+        floats = [val.x, val.y] if val.z is None else [val.x, val.y, val.z]
+    elif isinstance(val, Color):
+        floats = [val.r, val.g, val.b, val.a]
+    elif isinstance(val, list):
+        floats = [float(v) for v in val]
+    else:
+        return
+
+    set_property_value(project._chunk_tree, comp.id, layer._model.id,
+                       prop._match_path, floats, project._big_endian)
