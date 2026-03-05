@@ -40,6 +40,17 @@ MASK_LIGHTEN = 5
 MASK_DIFFERENCE = 6
 
 
+# Default properties for Transform Group — AE omits these from the binary
+# when they are at their default values.
+_TRANSFORM_DEFAULTS = [
+    ("ADBE Anchor Point", 2, 2, [0.0, 0.0]),
+    ("ADBE Position", 2, 2, [0.0, 0.0]),
+    ("ADBE Scale", 3, 2, [100.0, 100.0]),
+    ("ADBE Rotate Z", 3, 1, 0.0),
+    ("ADBE Opacity", 3, 1, 100.0),
+]
+
+
 class ProjectParser:
     """Converts a parsed RIFF chunk tree into a Project model."""
 
@@ -575,6 +586,8 @@ class ProjectParser:
                         parsed.enabled = None
                     parsed.key = indexed_key
                     group.properties.append(NamedProperty(match_name, parsed))
+                    if match_name == "ADBE Transform Group" and isinstance(parsed, PropertyGroup):
+                        self._inject_transform_defaults(parsed, key_prefix)
                 match_name = ""
 
             i += 1
@@ -606,6 +619,24 @@ class ProjectParser:
             for np in group.properties
             if np.match_name.endswith("/enabled")
         )
+
+    def _inject_transform_defaults(self, group: PropertyGroup,
+                                     key_prefix: str) -> None:
+        """Add default entries for standard Transform properties not in the binary."""
+        existing = {np.match_name for np in group.properties}
+        # Don't add ADBE Position if position is split (ADBE Position_0 etc.)
+        has_split_pos = any(mn.startswith("ADBE Position_") for mn in existing)
+        for mn, prop_type, components, default_val in _TRANSFORM_DEFAULTS:
+            if mn in existing:
+                continue
+            if mn == "ADBE Position" and has_split_pos:
+                continue
+            full_key = f"{key_prefix}/ADBE Transform Group/{mn}" if key_prefix else f"ADBE Transform Group/{mn}"
+            prop = AnimatedProperty(
+                key=full_key, prop_type=prop_type,
+                components=components, value=default_val,
+            )
+            group.properties.append(NamedProperty(mn, prop))
 
     def _parse_property(self, chunk: Chunk,
                         key: str = "") -> PropertyGroup | AnimatedProperty | EffectInstance | TextProperty | None:
