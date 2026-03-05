@@ -37,6 +37,7 @@ aep-viewer = "aep_parser.gui:main"
 
 [tool.maturin]
 python-source = "python"
+python-packages = ["aep_parser", "aep_tools"]
 module-name = "aep_parser._core"
 features = ["pyo3/extension-module"]
 
