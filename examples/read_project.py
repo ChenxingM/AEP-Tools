@@ -9,126 +9,52 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+
 from aep_tools import Project, AVLayer, TextLayer, ShapeLayer, CameraLayer, LightLayer
 
 
-def main():
-    path = Path(r"C:\Users\cmp094\Desktop\MHYA2_238_V1.aep")
-    if not path.exists():
-        print(f"文件不存在: {path}")
-        sys.exit(1)
 
-    # ── 打开项目 ────────────────────────────────────────────────────────
-    proj = Project.open(path)
-    print(f"项目: {proj.file}")
-    print(f"合成数量: {len(proj.compositions)}")
-    print()
+path = Path(r"C:\Users\cmp094\Desktop\MHYA2_238_V1.aep")
 
-    # ── 遍历所有合成 ────────────────────────────────────────────────────
-    for comp in proj.compositions:
-        print(f"{'='*60}")
-        print(f"合成: {comp.name}")
-        print(f"  尺寸: {comp.width}x{comp.height}")
-        print(f"  帧率: {comp.frame_rate} fps")
-        print(f"  时长: {comp.duration:.2f}s")
-        print(f"  工作区: {comp.work_area_start:.2f}s - "
-              f"{comp.work_area_start + comp.work_area_duration:.2f}s")
-        print(f"  背景色: {comp.bg_color}")
-        print(f"  图层数: {comp.num_layers}")
+proj = Project.open(path)
+comp = next((c for c in proj.compositions if c.name == "_LO_238"), None)
+if comp:
+    print(f"合成: {comp.name} ({comp.width}x{comp.height})")
+    print(f"默认位置（合成中心）: [{comp.width/2}, {comp.height/2}]\n")
 
-        # 合成标记
-        mp = comp.marker_property
-        if mp and mp.num_keys > 0:
-            print(f"  标记数: {mp.num_keys}")
-            for i in range(1, mp.num_keys + 1):
-                mv = mp.key_value(i)
-                print(f"    [{i}] t={mv.time:.2f}s  \"{mv.comment}\"  "
-                      f"duration={mv.duration:.2f}s")
+    for layer in comp.layers:
+        print(f"图层 {layer.index}: {layer.name}")
+        print(f"  入点={layer.in_point:.2f}s  出点={layer.out_point:.2f}s")
 
-        # ── 遍历图层 ────────────────────────────────────────────────────
-        for layer in comp.layers:
-            layer_type = type(layer).__name__
-            print(f"\n  图层 {layer.index}: {layer.name}  ({layer_type})")
-            print(f"    启用={layer.enabled}  3D={layer.three_d_layer}  "
-                  f"混合={getattr(layer.blending_mode, 'name', layer.blending_mode)}")
-            print(f"    入点={layer.in_point:.2f}s  出点={layer.out_point:.2f}s  "
-                  f"起始={layer.start_time:.2f}s")
+        # Position
+        if layer.position:
+            p = layer.position
+            print(f"  位置: {p.value}  (keys={p.num_keys})")
+        elif layer.position_x or layer.position_y:
+            px = layer.position_x
+            py = layer.position_y
+            xv = px.value if px else comp.width / 2
+            yv = py.value if py else comp.height / 2
+            # 0.0 = 默认值，实际位置是合成中心
+            x_keys = px.num_keys if px else 0
+            y_keys = py.num_keys if py else 0
+            print(f"  位置(分离): X={xv} (keys={x_keys})  Y={yv} (keys={y_keys})")
 
-            if layer.parent:
-                print(f"    父级: {layer.parent.name}")
+        if layer.scale:
+            print(f"  缩放: {layer.scale.value}")
+        if layer.opacity:
+            print(f"  不透明度: {layer.opacity.value}")
+        if layer.rotation:
+            print(f"  旋转: {layer.rotation.value}")
 
-            # Transform 属性
-            if layer.position:
-                pos = layer.position
-                print(f"    位置: {pos.value}  "
-                      f"(关键帧={pos.num_keys}, 动画={pos.is_time_varying})")
-            if layer.scale:
-                print(f"    缩放: {layer.scale.value}")
-            if layer.rotation:
-                print(f"    旋转: {layer.rotation.value}")
-            if layer.opacity:
-                opa = layer.opacity
-                print(f"    不透明度: {opa.value}")
-                if opa.num_keys > 0:
-                    for i in range(1, opa.num_keys + 1):
-                        print(f"      关键帧[{i}] t={opa.key_time(i):.2f}s  "
-                              f"v={opa.key_value(i)}")
-            if layer.anchor_point:
-                print(f"    锚点: {layer.anchor_point.value}")
+        if layer.num_effects > 0:
+            print(f"  效果: {layer.num_effects} 个")
+            for i in range(1, layer.num_effects + 1):
+                print(f"    [{i}] {layer.effect(i).name}")
 
-            # 表达式
-            if layer.position and layer.position.expression:
-                print(f"    位置表达式: {layer.position.expression}")
-
-            # 时间重映射
-            if layer.time_remap_enabled:
-                tr = layer.time_remap
-                print(f"    时间重映射: 关键帧={tr.num_keys}")
-
-            # 文本图层
-            if isinstance(layer, TextLayer) and layer.source_text:
-                st = layer.source_text
-                print(f"    文本: \"{st.text}\"")
-                if st.fonts:
-                    print(f"    字体: {st.fonts}")
-
-            # 形状图层
-            if isinstance(layer, ShapeLayer) and layer.contents:
-                print(f"    形状内容: {layer.contents.num_properties} 个子属性")
-
-            # 摄像机图层
-            if isinstance(layer, CameraLayer) and layer.camera_options:
-                cam = layer.camera_options
-                print(f"    摄像机选项: {cam.num_properties} 个参数")
-
-            # 效果
-            if layer.num_effects > 0:
-                print(f"    效果数: {layer.num_effects}")
-                for i in range(1, layer.num_effects + 1):
-                    eff = layer.effect(i)
-                    print(f"      [{i}] {eff.name}  ({eff.match_name})  "
-                          f"参数={eff.num_params}")
-
-            # 蒙版
-            if layer.num_masks > 0:
-                print(f"    蒙版数: {layer.num_masks}")
-                for i in range(1, layer.num_masks + 1):
-                    m = layer.mask(i)
-                    print(f"      [{i}] {m.name}  模式={m.mode.name}  "
-                          f"反转={m.inverted}")
-
+        if layer.num_masks > 0:
+            print(f"  蒙版: {layer.num_masks} 个")
+            for i in range(1, layer.num_masks + 1):
+                m = layer.mask(i)
+                print(f"    [{i}] {m.name}  模式={m.mode.name}")
         print()
-
-    # ── 渲染队列 ────────────────────────────────────────────────────────
-    rq = proj.render_queue
-    if rq.num_items > 0:
-        print(f"{'='*60}")
-        print(f"渲染队列: {rq.num_items} 项")
-        for i in range(1, rq.num_items + 1):
-            item = rq.item(i)
-            print(f"  [{i}] {item.comp_name}  状态={item.status}  "
-                  f"输出模块={item.num_output_modules}")
-
-
-if __name__ == "__main__":
-    main()
