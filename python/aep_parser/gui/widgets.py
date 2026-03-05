@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint
+from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint, QEvent
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPolygon
 from PySide6.QtWidgets import (
     QHeaderView, QLabel, QStyle, QStyledItemDelegate,
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import (
-    ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID,
+    ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID, ROLE_LAYER_ID,
     COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
     fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
@@ -104,6 +104,7 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
 
         layer_item.setText(0, f"{i}  {name}")
         layer_item.setData(0, ROLE_NODE_TYPE, "layer")
+        layer_item.setData(0, ROLE_LAYER_ID, layer.get("id"))
         if ltype == "precomp":
             layer_item.setData(0, ROLE_ASSET_ID, layer.get("assetId"))
 
@@ -222,10 +223,13 @@ class CompWidget(QWidget):
 
     precomp_requested = Signal(int)
 
-    def __init__(self, comp: dict, parent=None, *, assets: dict | None = None):
+    def __init__(self, comp: dict, parent=None, *,
+                 assets: dict | None = None, tools_project=None):
         super().__init__(parent)
         self.comp = comp
         self._assets = assets or {}
+        self._tools_project = tools_project
+        self._editing_item = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -276,15 +280,70 @@ class CompWidget(QWidget):
         self.tree.setItemDelegateForColumn(2, kf_delegate)
 
         self.tree.itemDoubleClicked.connect(self._on_double_click)
+        self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.installEventFilter(self)
 
         build_layer_tree(self.tree, c.get("layers", []), in_t, out_t,
                          assets=self._assets)
         layout.addWidget(self.tree)
 
+    @property
+    def _writable(self) -> bool:
+        return self._tools_project is not None and self._tools_project.writable
+
+    def _start_layer_edit(self, item: QTreeWidgetItem):
+        """Begin inline editing of a layer name."""
+        if not self._writable:
+            return
+        if item.data(0, ROLE_NODE_TYPE) != "layer":
+            return
+        # Strip the index prefix for editing
+        text = item.text(0)
+        parts = text.split("  ", 1)
+        name = parts[1] if len(parts) > 1 else text
+        self._editing_item = item
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.tree.blockSignals(True)
+        item.setText(0, name)
+        self.tree.blockSignals(False)
+        self.tree.editItem(item, 0)
+
+    def eventFilter(self, obj, event):
+        if obj is self.tree and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_F2:
+                item = self.tree.currentItem()
+                if item and item.data(0, ROLE_NODE_TYPE) == "layer":
+                    self._start_layer_edit(item)
+                    return True
+        return super().eventFilter(obj, event)
+
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
+        # Pre-comp navigation takes priority
         asset_id = item.data(0, ROLE_ASSET_ID)
         if asset_id is not None:
             self.precomp_requested.emit(asset_id)
+            return
+        # Double-click col 0 on a layer → start rename
+        if col == 0 and item.data(0, ROLE_NODE_TYPE) == "layer":
+            self._start_layer_edit(item)
+
+    def _on_item_changed(self, item: QTreeWidgetItem, col: int):
+        if col == 0 and self._editing_item is item:
+            self._editing_item = None
+            new_name = item.text(0).strip()
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            # Find the layer index to restore prefix
+            idx = self.tree.indexOfTopLevelItem(item)
+            if idx < 0:
+                return
+            layer_id = item.data(0, ROLE_LAYER_ID)
+            comp_id = self.comp.get("id")
+            # Restore index prefix
+            self.tree.blockSignals(True)
+            item.setText(0, f"{idx + 1}  {new_name}")
+            self.tree.blockSignals(False)
+            if self._writable and layer_id is not None and comp_id is not None:
+                self._tools_project.change_layer_name(comp_id, layer_id, new_name)
 
 
 # -- Project Panel --
