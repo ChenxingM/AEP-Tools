@@ -11,23 +11,24 @@ This document describes the internal data structure of Adobe After Effects proje
 2. [RIFF Chunk Layout](#2-riff-chunk-layout)
 3. [Chunk Type Reference](#3-chunk-type-reference)
 4. [Project Hierarchy](#4-project-hierarchy)
-5. [Item Data (idta)](#5-item-data-idta)
-6. [Composition Data (cdta)](#6-composition-data-cdta)
-7. [Layer Data (ldta)](#7-layer-data-ldta)
-8. [Property System](#8-property-system)
-9. [Animated Property (tdbs)](#9-animated-property-tdbs)
-10. [Keyframe Format](#10-keyframe-format)
-11. [Asset Data](#11-asset-data)
-12. [Effect Definitions](#12-effect-definitions)
-13. [Mask Data (mkif)](#13-mask-data-mkif)
-14. [Bezier Shape (shph)](#14-bezier-shape-shph)
-15. [Gradient Data (GCst)](#15-gradient-data-gcst)
-16. [Text Data (btdk / COS Format)](#16-text-data-btdk--cos-format)
-17. [Marker Data (Nmrd)](#17-marker-data-nmrd)
-18. [Layer Styles](#18-layer-styles)
-19. [AEPX XML Format](#19-aepx-xml-format)
-20. [Constants and Enumerations](#20-constants-and-enumerations)
-21. [Match Name Reference](#21-match-name-reference)
+5. [Project Version (head / svap)](#5-project-version-head--svap)
+6. [Item Data (idta)](#6-item-data-idta)
+7. [Composition Data (cdta)](#7-composition-data-cdta)
+8. [Layer Data (ldta)](#8-layer-data-ldta)
+9. [Property System](#9-property-system)
+10. [Animated Property (tdbs)](#10-animated-property-tdbs)
+11. [Keyframe Format](#11-keyframe-format)
+12. [Asset Data](#12-asset-data)
+13. [Effect Definitions](#13-effect-definitions)
+14. [Mask Data (mkif)](#14-mask-data-mkif)
+15. [Bezier Shape (shph)](#15-bezier-shape-shph)
+16. [Gradient Data (GCst)](#16-gradient-data-gcst)
+17. [Text Data (btdk / COS Format)](#17-text-data-btdk--cos-format)
+18. [Marker Data (Nmrd)](#18-marker-data-nmrd)
+19. [Layer Styles](#19-layer-styles)
+20. [AEPX XML Format](#20-aepx-xml-format)
+21. [Constants and Enumerations](#21-constants-and-enumerations)
+22. [Match Name Reference](#22-match-name-reference)
 
 ---
 
@@ -48,6 +49,16 @@ Offset  Size  Field           Type      Description
 - **RIFX** = Big-endian byte order (most common for AEP files)
 - **RIFF** = Little-endian byte order
 - All multi-byte integers and floats in the file follow this byte order
+
+### Trailing Data (XMP Metadata)
+
+AEP files may contain **XMP metadata** appended after the RIFX chunk. This data is not part of the RIFF structure and must be preserved during round-trip save operations.
+
+```
+[RIFX chunk (8 + file_size bytes)] [XMP metadata (variable, typically ~14KB)]
+```
+
+The RIFX chunk boundary is at offset `8 + file_size` (where `file_size` is the uint32 at offset 4). Any bytes beyond this offset are trailing data.
 
 ### AEPX Detection
 
@@ -124,12 +135,16 @@ Offset  Size  Field           Type      Description
 | `Utf8` | var | UTF-8 encoded string |
 | `wsnm` | var | UTF-16 encoded workspace name |
 | `tdmn` | var | Match name string (ADBE identifier) |
+| `head` | 20 | Project header (format level, version) |
+| `svap` | 4 | Last-save AE version identifier |
 | `idta` | ~20 | Item metadata (type, ID) |
 | `cdta` | ~142 | Composition metadata (size, framerate, duration) |
 | `ldta` | ~164 | Layer metadata (timing, flags, blend mode) |
 | `tdsb` | 4 | Property visibility/split/enabled flags |
 | `tdb4` | ~69 | Property type metadata (dimensions, type flags) |
 | `cdat` | var | Static property value (float64 array) |
+| `tdum` | 8 | Property minimum bound (float64) |
+| `tduM` | 8 | Property maximum bound (float64) |
 | `lhd3` | ~20 | Keyframe list header (count, item size) |
 | `ldat` | var | Keyframe list data (binary array) |
 | `opti` | var | Asset options (solid color or type code) |
@@ -201,7 +216,59 @@ RIFX "Egg!"
 
 ---
 
-## 5. Item Data (idta)
+## 5. Project Version (head / svap)
+
+AE version information is stored in two top-level chunks directly under the RIFX root.
+
+### head Chunk (20 bytes)
+
+```
+Offset  Size  Field           Type      Description
+─────────────────────────────────────────────────────
+0       2     format_level    uint16    File format level (encodes AE major version)
+2       2     minor_version   uint16    AE minor version number
+4       4     version_id      uint32    Internal version identifier (same as svap)
+8       12    (reserved)      —         Timestamps, internal counters
+```
+
+**AE major version:** `ae_major = format_level - 71`
+
+| format_level | AE Major Version |
+|-------------|-----------------|
+| 93 | AE 22 (CC 2022) |
+| 94 | AE 23 (CC 2023) |
+| 95 | AE 24 (CC 2024) |
+| 96 | AE 25 (CC 2025) |
+| 97 | AE 26 |
+
+**AE minor version:** `head[2:4]` is a uint16 that directly gives the minor version (reliable for AE 23+). For example, format_level=96 and minor_version=6 → AE 25.6.
+
+### svap Chunk (4 bytes)
+
+```
+Offset  Size  Field           Type      Description
+─────────────────────────────────────────────────────
+0       4     version_id      uint32    Internal AE build identifier
+```
+
+The 4-byte `svap` value is identical to `head[4:8]`. It encodes an internal build number but does **not** directly map to the marketing patch version (e.g., the `.4` in 25.6.4 is not reliably extractable).
+
+### Hex Offsets for Manual Editing
+
+In a typical AEP file:
+
+| Chunk | Offset | Size | Description |
+|-------|--------|------|-------------|
+| `svap` | 0x14 | 4 | `version_id` — last-save AE build identifier |
+| `head` format_level | 0x20 | 2 | uint16 — determines AE major version |
+| `head` minor_version | 0x22 | 2 | uint16 — AE minor version |
+| `head` version_id | 0x24 | 4 | Same value as svap |
+
+> **Note:** These offsets assume standard AEP layout. The `svap` chunk is the first child of the RIFX root, followed by `head`.
+
+---
+
+## 6. Item Data (idta)
 
 Identifies the type and ID of a project item.
 
@@ -223,7 +290,7 @@ Offset  Size  Field           Type      Description
 
 ---
 
-## 6. Composition Data (cdta)
+## 7. Composition Data (cdta)
 
 Stores composition-level metadata. Time values use **rational number** encoding.
 
@@ -272,7 +339,7 @@ value   = raw_value / divisor
 
 ---
 
-## 7. Layer Data (ldta)
+## 8. Layer Data (ldta)
 
 Contains all core layer attributes.
 
@@ -359,7 +426,7 @@ referenced by `asset_id`.
 
 ---
 
-## 8. Property System
+## 9. Property System
 
 After Effects stores all animatable properties in a **tree** of property groups.
 
@@ -415,7 +482,7 @@ Properties manifest as different chunk types based on what they represent:
 
 ---
 
-## 9. Animated Property (tdbs)
+## 10. Animated Property (tdbs)
 
 A `LIST tdbs` contains the full definition of an animated property.
 
@@ -484,7 +551,33 @@ despite the names. The naming is a historical artifact.*
 
 ### Static Value (cdat)
 
-Array of `components` × float64 values. Interpreted by prop_type:
+The `cdat` chunk stores the property's static value followed by tangent/velocity slots. Its total size depends on the property type:
+
+**Non-spatial properties** (Scale, Rotation, Opacity): `components × 5` float64s
+
+```
+[value₁..valueₙ] [ease_in₁..ease_inₙ] [ease_out₁..ease_outₙ] [influence_in₁..ₙ] [influence_out₁..ₙ]
+```
+
+**Spatial properties** (Position, Anchor Point): `components × 3 + 3` float64s
+
+```
+[value₁..valueₙ] [spatial_in₁..ₙ] [spatial_out₁..ₙ] [temporal_ease × 3]
+```
+
+**Examples of cdat sizes:**
+
+| Property | Components | Spatial | float64 count | Byte size |
+|----------|-----------|---------|--------------|-----------|
+| Opacity | 1 | No | 1×5 = 5 | 40 |
+| Rotation Z | 1 | No | 1×5 = 5 | 40 |
+| Position (2D) | 2 | Yes | 2×3+3 = 9 | 72 |
+| Anchor Point (2D) | 2 | Yes | 2×3+3 = 9 | 72 |
+| Scale (3D) | 3 | No | 3×5 = 15 | 120 |
+
+> **Important:** When modifying cdat values, only overwrite the first `components` float64s (the actual value). The remaining tangent/velocity data must be preserved to avoid corrupting the project file.
+
+**Value interpretation by prop_type:**
 
 | prop_type | Layout | Description |
 |-----------|--------|-------------|
@@ -495,9 +588,22 @@ Array of `components` × float64 values. Interpreted by prop_type:
 | 4 (LayerRef) | Not in cdat | See tdpi/tdps chunks |
 | 6 (Uint) | Not in cdat | See tdli chunk |
 
+> **Note:** AE stores Scale and Opacity as 0–1 fractions internally (1.0 = 100%). The AE UI displays them as percentages.
+
+### Property Bounds (tdum / tduM)
+
+The `tdum` and `tduM` chunks define the minimum and maximum allowed values for a property. Each contains a single float64.
+
+```
+tdum: 8 bytes → float64 minimum value
+tduM: 8 bytes → float64 maximum value
+```
+
+These chunks are **always present** in real AEP files, even when both values are 0.0. For example, Opacity has tdum=0.0 and tduM=100.0.
+
 ---
 
-## 10. Keyframe Format
+## 11. Keyframe Format
 
 ### Keyframe List Container (list)
 
@@ -618,7 +724,7 @@ common header (8 bytes) + 8 bytes of basic data. The parser checks
 
 ---
 
-## 11. Asset Data
+## 12. Asset Data
 
 Assets are stored under `LIST Item` with `item_type=7`, containing a `LIST Pin`.
 
@@ -681,7 +787,7 @@ When `target_is_folder` is `true`, the asset is an **image sequence** and the
 
 ---
 
-## 12. Effect Definitions
+## 13. Effect Definitions
 
 Global effect templates are stored in `LIST EfdG`.
 
@@ -734,7 +840,7 @@ tree under `"ADBE Effect Parade"`. Contains `fnam` (instance name) and `tdgp`
 
 ---
 
-## 13. Mask Data (mkif)
+## 14. Mask Data (mkif)
 
 Mask metadata chunk, found in property groups under `"ADBE Mask Parade"`.
 
@@ -766,7 +872,7 @@ shape, feather, opacity, and expansion properties.
 
 ---
 
-## 14. Bezier Shape (shph)
+## 15. Bezier Shape (shph)
 
 Shape path data for vector masks and shape layers.
 
@@ -827,7 +933,7 @@ all keyframes) and `bezierCount` (total number of shape keyframes).
 
 ---
 
-## 15. Gradient Data (GCst)
+## 16. Gradient Data (GCst)
 
 Animated gradient property.
 
@@ -912,7 +1018,7 @@ Each keyframe's gradient is an XML string using After Effects' property XML form
 
 ---
 
-## 16. Text Data (btdk / COS Format)
+## 17. Text Data (btdk / COS Format)
 
 Text documents use the **COS** (Carousel Object System) binary format,
 a PDF-like token stream.
@@ -1014,7 +1120,7 @@ LIST btds
 
 ---
 
-## 17. Marker Data (Nmrd)
+## 18. Marker Data (Nmrd)
 
 Composition markers (chapter points, cue marks).
 
@@ -1060,7 +1166,7 @@ LIST mrst
 
 ---
 
-## 18. Layer Styles
+## 19. Layer Styles
 
 Layer Styles (Drop Shadow, Inner Glow, Bevel, Stroke, etc.) have special handling.
 
@@ -1124,7 +1230,7 @@ innerShadow/blur
 
 ---
 
-## 19. AEPX XML Format
+## 20. AEPX XML Format
 
 AEPX files encode the same chunk tree as XML.
 
@@ -1176,7 +1282,7 @@ The parser defaults to big-endian for binary data within `bdata` attributes.
 
 ---
 
-## 20. Constants and Enumerations
+## 21. Constants and Enumerations
 
 ### Blend Modes
 
@@ -1246,7 +1352,7 @@ The parser defaults to big-endian for binary data within `bdata` attributes.
 
 ---
 
-## 21. Match Name Reference
+## 22. Match Name Reference
 
 Match names (`tdmn` chunks) identify standard After Effects properties. The parser
 maps these to human-readable names.

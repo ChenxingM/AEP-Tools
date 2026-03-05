@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -192,11 +193,13 @@ class Project:
 
     def __init__(self, model: ProjectModel, file_path: str | None = None,
                  chunk_tree: Chunk | None = None,
-                 big_endian: bool = True) -> None:
+                 big_endian: bool = True,
+                 trailing_data: bytes = b"") -> None:
         self._model = model
         self._file = file_path
         self._chunk_tree = chunk_tree
         self._big_endian = big_endian
+        self._trailing_data = trailing_data
         self._comps_cache: list[CompItem] | None = None
         self._items_cache: list[Any] | None = None
 
@@ -272,6 +275,29 @@ class Project:
     def render_queue(self) -> RenderQueue:
         return RenderQueue(self._model.render_queue)
 
+    # Version info
+
+    @property
+    def ae_version(self) -> str | None:
+        """AE version that last saved this project (e.g. ``"25.6"``).
+
+        Derived from the ``head`` chunk: format level encodes the major
+        version and bytes 2-3 encode the minor version.
+        Returns ``None`` for ``.aepx`` files or if the header is missing.
+        """
+        if self._chunk_tree is None:
+            return None
+        try:
+            head = self._chunk_tree.list.find_optional("head")
+            if not head or not isinstance(head.data, (bytes, bytearray)) or len(head.data) < 4:
+                return None
+            fmt_level = struct.unpack(">H", head.data[0:2])[0]
+            minor = struct.unpack(">H", head.data[2:4])[0]
+            major = fmt_level - 71
+            return f"{major}.{minor}"
+        except Exception:
+            return None
+
     # Write support
 
     @property
@@ -293,7 +319,8 @@ class Project:
         out_path = path or self._file
         if out_path is None:
             raise RuntimeError("No output path specified and no original file path.")
-        save_aep(self._chunk_tree, self._big_endian, out_path)
+        save_aep(self._chunk_tree, self._big_endian, out_path,
+                 self._trailing_data)
 
     def change_layer_name(self, comp_id: int, layer_id: int,
                           new_name: str) -> bool:
@@ -376,18 +403,25 @@ def open_aep(path: str | Path) -> Project:
     p = Path(path)
     raw = p.read_bytes()
 
+    # Extract trailing data (XMP metadata) after the RIFX chunk
+    import struct as _st
+    _rifx_end = 8 + _st.unpack_from(">I", raw, 4)[0]
+    trailing = raw[_rifx_end:] if _rifx_end < len(raw) else b""
+
     if _HAS_RUST:
         root_chunk, big_endian = _rust_parse_riff(raw)
         pp = ProjectParser(big_endian=big_endian)
         model = pp.parse_project(root_chunk)
-        return Project(model, str(p), chunk_tree=root_chunk, big_endian=big_endian)
+        return Project(model, str(p), chunk_tree=root_chunk,
+                       big_endian=big_endian, trailing_data=trailing)
 
     parser = AepChunkParser(raw, 0, True)
     root_chunk = parser.parse()
     big_endian = parser.big_endian
     pp = ProjectParser(big_endian=big_endian)
     model = pp.parse_project(root_chunk)
-    return Project(model, str(p), chunk_tree=root_chunk, big_endian=big_endian)
+    return Project(model, str(p), chunk_tree=root_chunk,
+                   big_endian=big_endian, trailing_data=trailing)
 
 
 def open_aepx(path: str | Path) -> Project:

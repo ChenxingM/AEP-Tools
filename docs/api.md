@@ -64,6 +64,8 @@ proj = load_project(model)
 | Property / Method | Type | Description |
 |---|---|---|
 | `file` | `str \| None` | File path (if opened from file) |
+| `ae_version` | `str \| None` | AE version that last saved this file (e.g. `"25.6"`) |
+| `writable` | `bool` | `True` if loaded from binary `.aep` (supports save/modify) |
 | `compositions` | `list[CompItem]` | All compositions |
 | `comp(name_or_index)` | `CompItem \| None` | Lookup by name or 1-based index |
 | `num_items` | `int` | Number of top-level project items |
@@ -71,10 +73,14 @@ proj = load_project(model)
 | `item(index)` | `Any \| None` | Get item by 1-based index |
 | `active_item` | `CompItem \| None` | Active composition (if available) |
 | `render_queue` | `RenderQueue` | Render queue |
+| `save(path)` | `None` | Save to `.aep` file (requires `writable`) |
+| `change_layer_name(comp_id, layer_id, new_name)` | `bool` | Rename a layer in the chunk tree |
+| `change_property_value(comp_id, layer_id, match_name_path, new_value)` | `bool` | Change a property's static value |
 
 ```python
 proj.comp("Main Comp")    # by name
 proj.comp(1)              # by 1-based index
+proj.ae_version           # "25.6"
 ```
 
 ---
@@ -499,6 +505,69 @@ print(mv.comment, mv.time)    # "Intro" 1.0
 | `status` | `int` | Render status code |
 | `num_output_modules` | `int` | Number of output modules |
 | `output_module(index)` | `OutputModule \| None` | Get by 1-based index |
+
+---
+
+## Write-Back (Binary .aep Only)
+
+Projects opened from binary `.aep` files support modification and saving. The `writable` property indicates availability.
+
+### Saving
+
+```python
+proj = Project.open("input.aep")
+assert proj.writable  # True for .aep, False for .aepx
+
+# Save to a new file
+proj.save("output.aep")
+
+# Overwrite original
+proj.save()
+```
+
+### Renaming Layers
+
+```python
+comp = proj.comp("Main Comp")
+layer = comp.layer(1)
+proj.change_layer_name(comp.id, layer._model.id, "New Name")
+proj.save("output.aep")
+```
+
+### Modifying Property Values
+
+```python
+# Change position to (500, 300)
+proj.change_property_value(
+    comp.id, layer._model.id,
+    ["ADBE Transform Group", "ADBE Position"],
+    [500.0, 300.0]
+)
+
+# Change opacity to 50% (AE stores as 0–1 fraction)
+proj.change_property_value(
+    comp.id, layer._model.id,
+    ["ADBE Transform Group", "ADBE Opacity"],
+    [0.5]
+)
+
+# Change scale to 120% (AE stores as 0–1 fraction)
+proj.change_property_value(
+    comp.id, layer._model.id,
+    ["ADBE Transform Group", "ADBE Scale"],
+    [1.2, 1.2]
+)
+
+proj.save("output.aep")
+```
+
+> **Note:** AE stores Scale and Opacity as 0–1 fractions internally (1.0 = 100%). When writing values, use fractions, not percentages. If a Transform property (Anchor Point, Position, Scale, Rotation, Opacity) doesn't exist in the binary, it will be created automatically with the correct chunk structure.
+
+### Version Info
+
+```python
+proj.ae_version    # "25.6" — AE version that last saved this file (None for .aepx)
+```
 
 ---
 

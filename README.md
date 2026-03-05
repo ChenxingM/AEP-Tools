@@ -8,7 +8,9 @@ Parse After Effects project files (`.aep` binary / `.aepx` XML) into structured 
 - XML `.aepx` parser
 - Rust-accelerated RIFF parsing (~15x faster than pure Python)
 - Extracts: compositions, layers, properties, keyframes, effects, masks, text, markers, render queue
-- PySide6 GUI viewer with AE-like dark theme
+- **Write-back**: modify layer names, property values, and save back to `.aep`
+- AE scripting-style API (`aep_tools`) with 1-based indexing
+- PySide6 GUI viewer/editor with AE-like dark theme
 - CLI tool for batch processing
 
 ## Installation
@@ -37,7 +39,29 @@ pytest
 
 ## Usage
 
-### Python API
+### Python API (aep_tools)
+
+```python
+from aep_tools import Project
+
+proj = Project.open("input.aep")
+print(proj.ae_version)          # "25.6"
+
+comp = proj.comp("Main Comp")
+layer = comp.layer(1)
+print(layer.position.value)     # [960, 540]
+print(layer.opacity.value)      # 1.0
+
+# Modify and save
+proj.change_property_value(
+    comp.id, layer._model.id,
+    ["ADBE Transform Group", "ADBE Position"],
+    [500.0, 300.0]
+)
+proj.save("output.aep")
+```
+
+### Low-level Parser API (aep_parser)
 
 ```python
 from aep_parser import parse_aep, parse_aepx
@@ -86,26 +110,32 @@ aep-parser/
 ├── rust/
 │   └── lib.rs                    # Rust RIFF parser → aep_parser._core
 ├── python/
-│   └── aep_parser/
-│       ├── __init__.py           # Public API: parse_aep(), parse_aepx()
-│       ├── __main__.py           # CLI: python -m aep_parser
-│       ├── _core.pyi             # Type stubs for Rust extension
-│       ├── models.py             # Data models (Project, Composition, Layer, ...)
-│       ├── _parser/              # Internal parsing modules
-│       │   ├── project.py        # Chunk tree → Project model
-│       │   ├── riff.py           # Pure Python RIFF parser (fallback)
-│       │   ├── aepx.py           # XML AEPX → chunk tree
-│       │   ├── binary_reader.py  # Low-level binary reader
-│       │   ├── chunk.py          # Chunk/ChunkList types
-│       │   └── cos.py            # COS text format parser
-│       └── gui/                  # GUI (optional, needs PySide6)
-│           ├── __init__.py       # Entry: python -m aep_parser.gui
-│           ├── app.py            # MainWindow
-│           ├── widgets.py        # CompWidget, ProjectPanel
-│           └── theme.py          # Colors, styles, ADBE names
+│   ├── aep_parser/               # Low-level parser
+│   │   ├── __init__.py           # Public API: parse_aep(), parse_aepx()
+│   │   ├── __main__.py           # CLI: python -m aep_parser
+│   │   ├── _core.pyi             # Type stubs for Rust extension
+│   │   ├── models.py             # Data models (Project, Composition, Layer, ...)
+│   │   ├── _parser/              # Internal parsing modules
+│   │   │   ├── project.py        # Chunk tree → Project model
+│   │   │   ├── riff.py           # Pure Python RIFF parser (fallback)
+│   │   │   ├── aepx.py           # XML AEPX → chunk tree
+│   │   │   ├── binary_reader.py  # Low-level binary reader
+│   │   │   ├── chunk.py          # Chunk/ChunkList types
+│   │   │   └── cos.py            # COS text format parser
+│   │   └── gui/                  # GUI viewer/editor (optional, needs PySide6)
+│   │       ├── __init__.py       # Entry: python -m aep_parser.gui
+│   │       ├── app.py            # MainWindow
+│   │       ├── widgets.py        # CompWidget, ProjectPanel
+│   │       └── theme.py          # Colors, styles, ADBE names
+│   └── aep_tools/                # High-level scripting API
+│       ├── __init__.py           # Public API: Project, open_aep, open_aepx
+│       ├── _project.py           # Project wrapper (items, comps, version, save)
+│       ├── _comp.py              # CompItem, Layer, Property wrappers
+│       └── _writer.py            # Binary write-back (layer names, property values)
 ├── tests/
 │   └── test_parser.py
 └── docs/
+    ├── api.md                    # aep_tools API reference
     ├── aep-format.md             # AEP format specification (English)
     └── aep-format-zh.md          # AEP format specification (Chinese)
 ```
