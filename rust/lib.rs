@@ -7,9 +7,9 @@ use std::str;
 struct Chunk {
     #[pyo3(get)]
     header: String,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     length: usize,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     data: PyObject, // bytes | str | ChunkList
 }
 
