@@ -29,6 +29,7 @@ This document describes the internal data structure of Adobe After Effects proje
 20. [AEPX XML Format](#20-aepx-xml-format)
 21. [Constants and Enumerations](#21-constants-and-enumerations)
 22. [Match Name Reference](#22-match-name-reference)
+23. [Write-Back / RIFF Serialization](#23-write-back--riff-serialization)
 
 ---
 
@@ -1486,3 +1487,178 @@ maps these to human-readable names.
 | `ADBE Twirl` | Twirl |
 | `ADBE Spherize` | Spherize |
 | `ADBE Radial Wipe` | Radial Wipe |
+
+---
+
+## 23. Write-Back / RIFF Serialization
+
+This section documents how modified chunk trees are serialized back to valid `.aep` binary files.
+
+### Overview
+
+The write-back process operates on the in-memory chunk tree: values are modified by patching individual chunk data, then the entire tree is re-serialized. **Chunk sizes are recalculated during serialization** — the original `chunk.length` is not trusted for container chunks.
+
+### Serialization by Chunk Type
+
+#### Root Chunk (RIFX/RIFF)
+
+```
+[magic 4B] [size 4B] [file_type 4B "Egg!"] [children...]
+```
+
+- `magic`: preserved from parse (`"RIFX"` or `"RIFF"`)
+- `size`: **recalculated** as `4 (file_type) + total children bytes`
+- Written as a placeholder `0x00000000`, then patched after all children are written
+
+#### LIST Chunks
+
+```
+"LIST" [size 4B] [list_type 4B] [children...]
+```
+
+- `size`: **recalculated** as `4 (list_type) + total children bytes`
+- Same placeholder-then-patch approach as root
+
+#### Non-LIST Container Chunks (tdsn, fnam, pdnm)
+
+```
+[header 4B] [size 4B] [children...]
+```
+
+- These have `ChunkList` data with `type=""` — **no type prefix** written (unlike LIST which writes a 4-byte type)
+- `size`: recalculated from children
+
+#### String Chunks (Utf8, alas, tdmn, wsnm)
+
+```
+[header 4B] [size 4B] [encoded_bytes...]
+```
+
+- `Utf8` / `alas`: UTF-8 encoded
+- `wsnm`: UTF-16-LE encoded
+- `tdmn`: UTF-8 + null terminator, **padded to original `chunk.length`** (typically 32 bytes) with zero bytes. This preserves fixed-size alignment expected by AE.
+- `size`: length of the encoded byte string (after padding for tdmn)
+
+#### Raw Binary Chunks (idta, cdta, ldta, tdb4, etc.)
+
+```
+[header 4B] [size 4B] [data...]
+```
+
+- `size`: `len(data)` — uses the current byte length of `chunk.data`
+- Data written as-is
+
+#### Special Case: btdk (Text Data)
+
+The parser stores `btdk` chunks with `header="btdk"` and `data=bytes`, but in the binary format btdk is actually a LIST subtype:
+
+```
+"LIST" [size 4B] "btdk" [data...]
+```
+
+- `size`: `4 (type "btdk") + len(data)`
+- The serializer detects `header == "btdk"` and wraps it in a LIST envelope
+
+### 2-Byte Alignment
+
+All chunks are aligned to 2-byte boundaries. If a chunk's data size is odd, **1 padding byte** (`0x00`) is appended after the data. This padding byte is **not** included in the chunk's `size` field.
+
+```
+[header 4B] [size 4B] [data (size bytes)] [0x00 if size is odd]
+```
+
+### Size Recalculation Formula
+
+For container chunks (root, LIST, non-LIST containers), the total child byte count is:
+
+```
+child_bytes = sum(
+    8 + child.data_size + (child.data_size % 2)    # header(4) + size(4) + data + padding
+    for child in children
+)
+```
+
+Container `size` field:
+- **LIST**: `4 (list_type) + child_bytes`
+- **Non-LIST container** (tdsn, fnam, pdnm): `child_bytes` (no type prefix)
+- **Root** (RIFX/RIFF): `4 (file_type) + child_bytes`
+
+### XMP Trailing Data
+
+AEP files may have XMP metadata appended **after** the RIFF container boundary (`offset 8 + file_size`). This data is not part of the chunk tree.
+
+During save, the trailing data is preserved by:
+1. On load: store bytes beyond `8 + file_size` as `trailing_data`
+2. On save: `write(serialized_chunks + trailing_data)`
+
+### Modifying Layer Names
+
+1. Navigate to `Fold → Item (comp_id) → Layr (layer_id)`
+2. Find the `Utf8` chunk in the `Layr` LIST
+3. Replace `chunk.data` with the new name string
+4. If no `Utf8` exists, create one and insert after `ldta`
+5. Chunk sizes are recalculated automatically on serialization
+
+### Modifying Property Values (cdat In-Place Patching)
+
+1. Navigate to `Layr → tdgp → [match_name_path] → tdbs → cdat`
+2. Read the first `components` float64 values (the actual property value)
+3. Overwrite only those bytes, **preserving the remaining tangent/velocity data**
+
+```
+cdat layout (non-spatial, e.g. Opacity):
+[value × N] [ease_in × N] [ease_out × N] [influence_in × N] [influence_out × N]
+ ↑ patch     ↑ preserve...
+
+cdat layout (spatial, e.g. Position):
+[value × N] [spatial_in × N] [spatial_out × N] [temporal × 3]
+ ↑ patch     ↑ preserve...
+```
+
+The `cdat.data` size is **not changed** — only the value portion at the start is overwritten.
+
+### Creating Missing Property Chunks
+
+When a Transform property (Anchor Point, Position, Scale, Rotation, Opacity) has no chunk in the binary (AE omits unmodified defaults), a new `tdbs` subtree is created from templates:
+
+```
+LIST tdbs
+├── tdsb    4B    flags = 0x00000001 (visible)
+├── tdsn    LIST  display name placeholder "-_0_/-"
+├── tdb4    124B  property metadata (from template)
+├── cdat    var   value + zero tangents
+├── tdum    8B    float64 minimum bound
+└── tduM    8B    float64 maximum bound
+```
+
+**Template tdb4 selection** by match name:
+
+| Match Name | Components | Spatial | cdat float64 count |
+|---|---|---|---|
+| `ADBE Opacity` | 1 | No | 1×5 = 5 (40 bytes) |
+| `ADBE Rotate Z` | 1 | No | 1×5 = 5 (40 bytes) |
+| `ADBE Scale` | 3 | No | 3×5 = 15 (120 bytes) |
+| `ADBE Anchor Point` | 2 | Yes | 2×3+3 = 9 (72 bytes) |
+| `ADBE Position` | 2 | Yes | 2×3+3 = 9 (72 bytes) |
+
+**Insertion**: the new `tdmn` + `LIST tdbs` pair is inserted into the parent `tdgp` before the `"ADBE Group End"` tdmn sentinel.
+
+**tdmn padding**: new tdmn chunks are null-terminated and padded to 32 bytes with `0x00`.
+
+### Modifying Keyframe Values (ldat In-Place Patching)
+
+1. Navigate to `tdbs → list → lhd3 + ldat`
+2. Read `count` and `item_size` from `lhd3` (offsets 10 and 18)
+3. Calculate value offset within each keyframe record:
+   - Common header: 8 bytes `[1B skip][4B time][1B transition][1B label][1B flags]`
+   - Spatial properties: +16 bytes skip, then `components × 8` bytes for values
+   - Non-spatial multi-dim: values start at offset 8
+4. Patch: `ldat[idx × item_size + value_offset : +packed_size]`
+
+### Endianness
+
+All multi-byte integers and floats follow the file's byte order:
+- `RIFX` → big-endian (`>`)
+- `RIFF` → little-endian (`<`)
+
+The `big_endian` flag determined at parse time is threaded through all serialization functions.

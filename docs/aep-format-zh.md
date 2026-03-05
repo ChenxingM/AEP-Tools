@@ -29,6 +29,7 @@
 20. [AEPX XML 格式](#20-aepx-xml-格式)
 21. [常量与枚举](#21-常量与枚举)
 22. [Match Name 参考表](#22-match-name-参考表)
+23. [写回 / RIFF 序列化](#23-写回--riff-序列化)
 
 ---
 
@@ -1481,3 +1482,178 @@ Match Name（`tdmn` 数据块）用于标识标准的 After Effects 属性。
 | `ADBE Twirl` | 旋转扭曲 (Twirl) |
 | `ADBE Spherize` | 球面化 (Spherize) |
 | `ADBE Radial Wipe` | 径向擦除 (Radial Wipe) |
+
+---
+
+## 23. 写回 / RIFF 序列化
+
+本节描述如何将修改后的数据块树序列化为有效的 `.aep` 二进制文件。
+
+### 概述
+
+写回过程在内存中的数据块树上操作：通过修改单个数据块的数据来改变值，然后重新序列化整棵树。**数据块大小在序列化时重新计算** — 不信任容器数据块的原始 `chunk.length`。
+
+### 按数据块类型序列化
+
+#### 根数据块 (RIFX/RIFF)
+
+```
+[magic 4B] [size 4B] [file_type 4B "Egg!"] [子块...]
+```
+
+- `magic`：保留解析时的值（`"RIFX"` 或 `"RIFF"`）
+- `size`：**重新计算** = `4 (file_type) + 全部子块字节数`
+- 先写占位符 `0x00000000`，待所有子块写入后回填
+
+#### LIST 数据块
+
+```
+"LIST" [size 4B] [list_type 4B] [子块...]
+```
+
+- `size`：**重新计算** = `4 (list_type) + 全部子块字节数`
+- 同根数据块使用占位符后回填
+
+#### 非 LIST 容器数据块 (tdsn, fnam, pdnm)
+
+```
+[header 4B] [size 4B] [子块...]
+```
+
+- 这类数据块的 `ChunkList.type` 为空字符串 — **不写入类型前缀**（与 LIST 不同，LIST 会写入 4 字节类型）
+- `size`：根据子块重新计算
+
+#### 字符串数据块 (Utf8, alas, tdmn, wsnm)
+
+```
+[header 4B] [size 4B] [编码字节...]
+```
+
+- `Utf8` / `alas`：UTF-8 编码
+- `wsnm`：UTF-16-LE 编码
+- `tdmn`：UTF-8 + 空终止符，**填充至原始 `chunk.length`**（通常 32 字节）。这保留了 AE 期望的固定大小对齐。
+- `size`：编码后的字节长度（tdmn 包含填充）
+
+#### 原始二进制数据块 (idta, cdta, ldta, tdb4 等)
+
+```
+[header 4B] [size 4B] [data...]
+```
+
+- `size`：`len(data)` — 使用 `chunk.data` 的当前字节长度
+- 数据原样写入
+
+#### 特殊情况：btdk（文字数据）
+
+解析器将 `btdk` 存储为 `header="btdk"`、`data=bytes`，但在二进制格式中 btdk 实际上是一个 LIST 子类型：
+
+```
+"LIST" [size 4B] "btdk" [data...]
+```
+
+- `size`：`4 (类型 "btdk") + len(data)`
+- 序列化器检测到 `header == "btdk"` 时自动包装为 LIST 信封
+
+### 2 字节对齐
+
+所有数据块按 2 字节边界对齐。如果数据块的数据大小为奇数，在数据之后追加 **1 个填充字节** (`0x00`)。此填充字节**不**包含在数据块的 `size` 字段中。
+
+```
+[header 4B] [size 4B] [data (size 字节)] [0x00（若 size 为奇数）]
+```
+
+### 大小重算公式
+
+对于容器数据块（根、LIST、非 LIST 容器），子块字节总量为：
+
+```
+child_bytes = sum(
+    8 + child.data_size + (child.data_size % 2)    # header(4) + size(4) + data + 填充
+    for child in children
+)
+```
+
+容器的 `size` 字段：
+- **LIST**：`4 (list_type) + child_bytes`
+- **非 LIST 容器** (tdsn, fnam, pdnm)：`child_bytes`（无类型前缀）
+- **根** (RIFX/RIFF)：`4 (file_type) + child_bytes`
+
+### XMP 尾部数据
+
+AEP 文件可能在 RIFF 容器边界之后（偏移量 `8 + file_size`）附加 XMP 元数据。此数据不属于数据块树。
+
+保存时保留尾部数据的方式：
+1. 加载时：将 `8 + file_size` 之后的所有字节存储为 `trailing_data`
+2. 保存时：`write(序列化数据块 + trailing_data)`
+
+### 修改图层名称
+
+1. 导航至 `Fold → Item (comp_id) → Layr (layer_id)`
+2. 在 `Layr` LIST 中找到 `Utf8` 数据块
+3. 将 `chunk.data` 替换为新名称字符串
+4. 如果不存在 `Utf8`，创建一个并插入到 `ldta` 之后
+5. 序列化时数据块大小自动重算
+
+### 修改属性值（cdat 原位修补）
+
+1. 导航至 `Layr → tdgp → [match_name_path] → tdbs → cdat`
+2. 读取前 `components` 个 float64 值（实际属性值）
+3. 仅覆盖这些字节，**保留剩余的切线/速度数据**
+
+```
+cdat 布局（非空间属性，如不透明度）：
+[值 × N] [ease_in × N] [ease_out × N] [influence_in × N] [influence_out × N]
+ ↑ 修补    ↑ 保留...
+
+cdat 布局（空间属性，如位置）：
+[值 × N] [空间入切线 × N] [空间出切线 × N] [时间缓动 × 3]
+ ↑ 修补    ↑ 保留...
+```
+
+`cdat.data` 的大小**不会改变** — 仅覆盖开头的值部分。
+
+### 创建缺失的属性数据块
+
+当 Transform 属性（锚点、位置、缩放、旋转、不透明度）在二进制中没有对应数据块（AE 省略未修改的默认值）时，从模板创建新的 `tdbs` 子树：
+
+```
+LIST tdbs
+├── tdsb    4B    标志 = 0x00000001（可见）
+├── tdsn    LIST  显示名称占位符 "-_0_/-"
+├── tdb4    124B  属性类型元数据（来自模板）
+├── cdat    可变   值 + 零切线
+├── tdum    8B    float64 最小边界值
+└── tduM    8B    float64 最大边界值
+```
+
+**模板 tdb4 按 Match Name 选择：**
+
+| Match Name | 分量数 | 空间 | cdat float64 数量 |
+|---|---|---|---|
+| `ADBE Opacity` | 1 | 否 | 1×5 = 5（40 字节） |
+| `ADBE Rotate Z` | 1 | 否 | 1×5 = 5（40 字节） |
+| `ADBE Scale` | 3 | 否 | 3×5 = 15（120 字节） |
+| `ADBE Anchor Point` | 2 | 是 | 2×3+3 = 9（72 字节） |
+| `ADBE Position` | 2 | 是 | 2×3+3 = 9（72 字节） |
+
+**插入位置**：新的 `tdmn` + `LIST tdbs` 对插入到父 `tdgp` 中 `"ADBE Group End"` tdmn 哨兵之前。
+
+**tdmn 填充**：新建的 tdmn 数据块以空字符终止并用 `0x00` 填充至 32 字节。
+
+### 修改关键帧值（ldat 原位修补）
+
+1. 导航至 `tdbs → list → lhd3 + ldat`
+2. 从 `lhd3` 读取 `count` 和 `item_size`（偏移量 10 和 18）
+3. 计算每个关键帧记录中值的偏移量：
+   - 公共头：8 字节 `[1B 跳过][4B 时间][1B 插值][1B 标签][1B 标志]`
+   - 空间属性：+16 字节跳过，然后 `components × 8` 字节的值
+   - 非空间多维属性：值从偏移量 8 开始
+4. 修补：`ldat[idx × item_size + value_offset : +packed_size]`
+
+### 字节序
+
+所有多字节整数和浮点数遵循文件的字节序：
+- `RIFX` → 大端序 (`>`)
+- `RIFF` → 小端序 (`<`)
+
+解析时确定的 `big_endian` 标志贯穿所有序列化函数。
