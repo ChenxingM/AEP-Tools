@@ -8,11 +8,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QMainWindow, QMessageBox, QProgressDialog,
-    QSplitter, QStatusBar, QTabWidget,
+    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
+    QProgressDialog, QSplitter, QStatusBar, QTabWidget,
 )
 
-from .. import parse_aep, parse_aepx
+from aep_tools import Project as ToolsProject
 from .widgets import CompWidget, ProjectPanel
 
 
@@ -24,6 +24,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._project_data: dict | None = None
+        self._tools_project: ToolsProject | None = None
+        self._source_path: Path | None = None
         self._comp_tab_map: dict[int, int] = {}
 
         self._setup_ui()
@@ -49,7 +51,8 @@ class MainWindow(QMainWindow):
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("  Open an AEP/AEPX file to begin")
+        self._status_label = QLabel("  Open an AEP/AEPX file to begin")
+        self.status.addPermanentWidget(self._status_label, 1)
 
     def _setup_menu(self):
         menubar = self.menuBar()
@@ -66,6 +69,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_json_action)
 
         file_menu.addSeparator()
+
+        self._save_action = QAction("Save AEP...", self)
+        self._save_action.setShortcut("Ctrl+Shift+S")
+        self._save_action.setEnabled(False)
+        self._save_action.triggered.connect(self._save_aep)
+        file_menu.addAction(self._save_action)
 
         export_action = QAction("Export JSON...", self)
         export_action.setShortcut("Ctrl+S")
@@ -114,30 +123,18 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            progress.setLabelText("Reading file...")
-            progress.setValue(0)
-            QApplication.processEvents()
-
-            ext = path.suffix.lower()
-            if ext == ".aepx":
-                raw = path.read_text(encoding="utf-8")
-            else:
-                raw = path.read_bytes()
-
             progress.setLabelText("Parsing...")
             progress.setValue(1)
             QApplication.processEvents()
 
-            if ext == ".aepx":
-                project = parse_aepx(raw)
-            else:
-                project = parse_aep(raw)
+            self._tools_project = ToolsProject.open(path)
+            self._source_path = path
 
             progress.setLabelText("Building UI...")
             progress.setValue(2)
             QApplication.processEvents()
 
-            self._project_data = project.to_dict()
+            self._project_data = self._tools_project._model.to_dict()
             self._display_project(path.name)
             progress.setValue(3)
         except Exception as e:
@@ -147,6 +144,8 @@ class MainWindow(QMainWindow):
     def _load_json(self, path: Path):
         self.setCursor(Qt.WaitCursor)
         try:
+            self._tools_project = None
+            self._source_path = None
             self._project_data = json.loads(path.read_text(encoding="utf-8"))
             self._display_project(path.name)
         except Exception as e:
@@ -160,14 +159,20 @@ class MainWindow(QMainWindow):
             return
 
         self.setWindowTitle(f"AEP Viewer \u2014 {filename}")
+        self._save_action.setEnabled(
+            self._tools_project is not None and self._tools_project.writable
+        )
         self.tab_widget.clear()
         self._comp_tab_map.clear()
 
         self.project_panel.load_project(data)
 
+        assets = data.get("assets", {})
         comps = data.get("compositions", [])
         for comp in comps:
-            widget = CompWidget(comp)
+            widget = CompWidget(comp, assets=assets,
+                                tools_project=self._tools_project)
+            widget.precomp_requested.connect(self._switch_to_comp)
             name = comp.get("name", f"Comp {comp.get('id', '?')}")
             idx = self.tab_widget.addTab(widget, name)
             self._comp_tab_map[comp.get("id", 0)] = idx
@@ -177,21 +182,44 @@ class MainWindow(QMainWindow):
         n_effects = len(data.get("effects", {}))
         n_rq = len(data.get("renderQueue", []))
         total_layers = sum(len(c.get("layers", [])) for c in comps)
-        parts = [
-            f"  {filename}",
-            f"{n_comps} compositions",
+        parts = [f"  {filename}"]
+        ver = self._get_ae_version()
+        if ver:
+            parts.append(ver)
+        parts += [
+            f"{n_comps} comps",
             f"{total_layers} layers",
             f"{n_assets} assets",
             f"{n_effects} effects",
         ]
         if n_rq:
-            parts.append(f"{n_rq} render queue items")
-        self.status.showMessage("  |  ".join(parts))
+            parts.append(f"{n_rq} RQ items")
+        self._status_label.setText("  |  ".join(parts))
+
+    def _get_ae_version(self) -> str | None:
+        """Read AE version string from the project API."""
+        if not self._tools_project:
+            return None
+        ver = self._tools_project.ae_version
+        return f"AE {ver}" if ver else None
 
     def _switch_to_comp(self, comp_id: int):
         idx = self._comp_tab_map.get(comp_id)
         if idx is not None:
             self.tab_widget.setCurrentIndex(idx)
+
+    def _save_aep(self):
+        if not self._tools_project or not self._tools_project.writable:
+            return
+        default = str(self._source_path) if self._source_path else ""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save AEP", default, "After Effects Project (*.aep)")
+        if path:
+            try:
+                self._tools_project.save(path)
+                self.status.showMessage(f"  Saved to {path}", 5000)
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
 
     def _export_json(self):
         if not self._project_data:
@@ -200,7 +228,7 @@ class MainWindow(QMainWindow):
         if path:
             text = json.dumps(self._project_data, indent=2, ensure_ascii=False, default=str)
             Path(path).write_text(text, encoding="utf-8")
-            self.status.showMessage(f"  Exported to {path}")
+            self.status.showMessage(f"  Exported to {path}", 5000)
 
     def _expand_all(self):
         widget = self.tab_widget.currentWidget()

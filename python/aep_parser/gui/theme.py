@@ -8,6 +8,9 @@ from PySide6.QtGui import QColor
 
 ROLE_KEYFRAMES = 257  # Qt.UserRole + 1
 ROLE_NODE_TYPE = 261  # Qt.UserRole + 5
+ROLE_ASSET_ID = 262   # Qt.UserRole + 6
+ROLE_LAYER_ID = 263   # Qt.UserRole + 7
+ROLE_MATCH_PATH = 264 # Qt.UserRole + 8
 
 COLOR_BG = QColor("#1e1e1e")
 COLOR_BG_ALT = QColor("#252526")
@@ -25,7 +28,38 @@ LAYER_TYPE_LABELS = {
     "camera": ("Camera", "#9cdcfe"),
     "light": ("Light", "#dcdcaa"),
     "asset": ("Asset", "#c586c0"),
+    "precomp": ("Pre-comp", "#c586c0"),
+    "footage": ("Footage", "#9a7ec7"),
+    "solid": ("Solid", "#b5cea8"),
+    "null": ("Null", "#d4d4d4"),
+    "adjustment": ("Adjustment", "#e8a624"),
 }
+
+def resolve_layer_visual_type(layer: dict, assets: dict) -> str:
+    """Return the most specific LAYER_TYPE_LABELS key for *layer*."""
+    flags = layer.get("flags", {})
+    if flags.get("isNull"):
+        return "null"
+    if flags.get("isAdjustment"):
+        return "adjustment"
+    ltype = layer.get("type", "asset")
+    if ltype != "asset":
+        return ltype
+    asset_id = layer.get("assetId")
+    if asset_id is not None:
+        asset = assets.get(asset_id) if isinstance(assets, dict) else None
+        if asset is None and isinstance(assets, list):
+            asset = next((a for a in assets if a.get("id") == asset_id), None)
+        if isinstance(asset, dict):
+            if "layers" in asset:
+                return "precomp"
+            atype = asset.get("type")
+            if atype == "solid":
+                return "solid"
+            if atype == "image":
+                return "footage"
+    return "asset"
+
 
 # Match name -> human-readable display name
 ADBE_NAMES = {
@@ -220,6 +254,8 @@ def fmt_val(v) -> str:
             return fmt_val(v.get("value"))
         return str(v)[:60]
     if isinstance(v, list):
+        if all(isinstance(x, (int, float)) for x in v):
+            return "(" + ", ".join(f"{x:g}" for x in v) + ")"
         return f"[{len(v)} items]"
     return str(v)[:60]
 
