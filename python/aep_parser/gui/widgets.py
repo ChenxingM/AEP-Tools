@@ -102,7 +102,9 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
         ltype = resolve_layer_visual_type(layer, assets)
         label, color = LAYER_TYPE_LABELS.get(ltype, ("?", "#cccccc"))
 
-        layer_item.setText(0, f"{i}  {name}")
+        layer_item.setText(0, str(i))
+        layer_item.setTextAlignment(0, Qt.AlignRight | Qt.AlignVCenter)
+        layer_item.setText(1, name)
         layer_item.setData(0, ROLE_NODE_TYPE, "layer")
         layer_item.setData(0, ROLE_LAYER_ID, layer.get("id"))
         if ltype == "precomp":
@@ -110,17 +112,18 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
 
         in_t = layer.get("inTime", 0)
         out_t = layer.get("outTime", 0)
-        layer_item.setText(1, f"[{label}]  {in_t:.2f} \u2192 {out_t:.2f}s")
+        layer_item.setText(2, f"[{label}]  {in_t:.2f} \u2192 {out_t:.2f}s")
 
         font = QFont()
         font.setBold(True)
         layer_item.setFont(0, font)
-        layer_item.setForeground(0, QColor(color))
-        layer_item.setForeground(1, COLOR_TEXT_DIM)
+        layer_item.setFont(1, font)
+        layer_item.setForeground(1, QColor(color))
+        layer_item.setForeground(2, COLOR_TEXT_DIM)
 
         flags = layer.get("flags", {})
         if not flags.get("visible", True):
-            layer_item.setForeground(0, QColor("#555555"))
+            layer_item.setForeground(1, QColor("#555555"))
 
         props = layer.get("properties", {})
         if isinstance(props, dict) and "properties" in props:
@@ -176,10 +179,10 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
             elif "fonts" in val and "documents" in val:
                 item.setData(0, ROLE_NODE_TYPE, "property")
                 item.setData(0, ROLE_MATCH_PATH, cur_path)
-                item.setText(1, fmt_val(val))
+                item.setText(2, fmt_val(val))
                 kfs = get_keyframes(val.get("documents", {}))
                 if kfs:
-                    item.setData(2, ROLE_KEYFRAMES, kfs)
+                    item.setData(3, ROLE_KEYFRAMES, kfs)
                     item.setForeground(0, COLOR_TEXT_ANIM)
 
             # MaskData
@@ -197,19 +200,19 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 item.setData(0, ROLE_NODE_TYPE, "property")
                 item.setData(0, ROLE_MATCH_PATH, cur_path)
                 static_val = val.get("value")
-                item.setText(1, fmt_val(static_val))
+                item.setText(2, fmt_val(static_val))
 
                 swatch = get_color_swatch(static_val)
                 if swatch:
-                    item.setBackground(1, swatch)
+                    item.setBackground(2, swatch)
                     lum = swatch.red() * 0.299 + swatch.green() * 0.587 + swatch.blue() * 0.114
-                    item.setForeground(1, QColor("#000000" if lum > 128 else "#ffffff"))
+                    item.setForeground(2, QColor("#000000" if lum > 128 else "#ffffff"))
 
                 kfs = get_keyframes(val)
                 if kfs:
-                    item.setData(2, ROLE_KEYFRAMES, kfs)
+                    item.setData(3, ROLE_KEYFRAMES, kfs)
                     item.setForeground(0, COLOR_TEXT_ANIM)
-                    item.setText(1, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
+                    item.setText(2, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
                 else:
                     item.setForeground(0, COLOR_TEXT)
 
@@ -217,9 +220,9 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                     item.setText(0, f"{item.text(0)}  \u2261")
 
             else:
-                item.setText(1, fmt_val(val))
+                item.setText(2, fmt_val(val))
         else:
-            item.setText(1, fmt_val(val))
+            item.setText(2, fmt_val(val))
 
         parent.addChild(item)
 
@@ -289,24 +292,26 @@ class CompWidget(QWidget):
         self.tree.setRootIsDecorated(True)
         self.tree.setExpandsOnDoubleClick(False)
         self.tree.setEditTriggers(QAbstractItemView.EditKeyPressed)
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Layer", "Value", "Keyframes"])
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["#", "Layer", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tree.setHorizontalScrollMode(QTreeWidget.ScrollPerPixel)
 
         header = self.tree.header()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.resizeSection(0, 400)
-        header.resizeSection(1, 220)
-        header.setMinimumSectionSize(80)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.resizeSection(0, 36)
+        header.resizeSection(1, 400)
+        header.resizeSection(2, 220)
+        header.setMinimumSectionSize(36)
 
         kf_delegate = KeyframeDelegate(self.tree)
         kf_delegate.set_time_range(in_t, out_t)
-        self.tree.setItemDelegateForColumn(2, kf_delegate)
+        self.tree.setItemDelegateForColumn(3, kf_delegate)
 
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.itemChanged.connect(self._on_item_changed)
@@ -326,16 +331,9 @@ class CompWidget(QWidget):
             return
         if item.data(0, ROLE_NODE_TYPE) != "layer":
             return
-        # Strip the index prefix for editing
-        text = item.text(0)
-        parts = text.split("  ", 1)
-        name = parts[1] if len(parts) > 1 else text
         self._editing_item = item
         item.setFlags(item.flags() | Qt.ItemIsEditable)
-        self.tree.blockSignals(True)
-        item.setText(0, name)
-        self.tree.blockSignals(False)
-        QTimer.singleShot(0, lambda: self.tree.editItem(item, 0))
+        QTimer.singleShot(0, lambda: self.tree.editItem(item, 1))
 
     def eventFilter(self, obj, event):
         if obj is self.tree and event.type() == QEvent.KeyPress:
@@ -352,15 +350,15 @@ class CompWidget(QWidget):
         if asset_id is not None:
             self.precomp_requested.emit(asset_id)
             return
-        # Double-click col 0 on a layer → start rename
-        if col == 0 and item.data(0, ROLE_NODE_TYPE) == "layer":
+        # Double-click col 1 on a layer → start rename
+        if col == 1 and item.data(0, ROLE_NODE_TYPE) == "layer":
             self._start_layer_edit(item)
             return
-        # Double-click col 1 on a property → start value edit
-        if col == 1 and self._writable and item.data(0, ROLE_MATCH_PATH):
+        # Double-click col 2 on a property → start value edit
+        if col == 2 and self._writable and item.data(0, ROLE_MATCH_PATH):
             self._editing_item = item
             item.setFlags(item.flags() | Qt.ItemIsEditable)
-            QTimer.singleShot(0, lambda: self.tree.editItem(item, 1))
+            QTimer.singleShot(0, lambda: self.tree.editItem(item, 2))
 
     def _on_item_changed(self, item: QTreeWidgetItem, col: int):
         if self._editing_item is not item:
@@ -368,26 +366,20 @@ class CompWidget(QWidget):
         self._editing_item = None
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
-        if col == 0:
+        if col == 1:
             # Layer name edit
-            new_name = item.text(0).strip()
-            idx = self.tree.indexOfTopLevelItem(item)
-            if idx < 0:
-                return
+            new_name = item.text(1).strip()
             layer_id = item.data(0, ROLE_LAYER_ID)
             comp_id = self.comp.get("id")
-            self.tree.blockSignals(True)
-            item.setText(0, f"{idx + 1}  {new_name}")
-            self.tree.blockSignals(False)
             if self._writable and layer_id is not None and comp_id is not None:
                 self._tools_project.change_layer_name(comp_id, layer_id, new_name)
 
-        elif col == 1:
+        elif col == 2:
             # Property value edit
             match_path = item.data(0, ROLE_MATCH_PATH)
             if not match_path:
                 return
-            text = item.text(1).strip()
+            text = item.text(2).strip()
             new_value = _parse_value_text(text)
             if new_value is None:
                 return
