@@ -8,8 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QMainWindow, QMessageBox, QProgressDialog,
-    QSplitter, QStatusBar, QTabWidget,
+    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
+    QProgressDialog, QSplitter, QStatusBar, QTabWidget,
 )
 
 from aep_tools import Project as ToolsProject
@@ -51,7 +51,8 @@ class MainWindow(QMainWindow):
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("  Open an AEP/AEPX file to begin")
+        self._status_label = QLabel("  Open an AEP/AEPX file to begin")
+        self.status.addPermanentWidget(self._status_label, 1)
 
     def _setup_menu(self):
         menubar = self.menuBar()
@@ -181,16 +182,26 @@ class MainWindow(QMainWindow):
         n_effects = len(data.get("effects", {}))
         n_rq = len(data.get("renderQueue", []))
         total_layers = sum(len(c.get("layers", [])) for c in comps)
-        parts = [
-            f"  {filename}",
-            f"{n_comps} compositions",
+        parts = [f"  {filename}"]
+        ver = self._get_ae_version()
+        if ver:
+            parts.append(ver)
+        parts += [
+            f"{n_comps} comps",
             f"{total_layers} layers",
             f"{n_assets} assets",
             f"{n_effects} effects",
         ]
         if n_rq:
-            parts.append(f"{n_rq} render queue items")
-        self.status.showMessage("  |  ".join(parts))
+            parts.append(f"{n_rq} RQ items")
+        self._status_label.setText("  |  ".join(parts))
+
+    def _get_ae_version(self) -> str | None:
+        """Read AE version string from the project API."""
+        if not self._tools_project:
+            return None
+        ver = self._tools_project.ae_version
+        return f"AE {ver}" if ver else None
 
     def _switch_to_comp(self, comp_id: int):
         idx = self._comp_tab_map.get(comp_id)
@@ -206,7 +217,7 @@ class MainWindow(QMainWindow):
         if path:
             try:
                 self._tools_project.save(path)
-                self.status.showMessage(f"  Saved to {path}")
+                self.status.showMessage(f"  Saved to {path}", 5000)
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
 
@@ -217,7 +228,7 @@ class MainWindow(QMainWindow):
         if path:
             text = json.dumps(self._project_data, indent=2, ensure_ascii=False, default=str)
             Path(path).write_text(text, encoding="utf-8")
-            self.status.showMessage(f"  Exported to {path}")
+            self.status.showMessage(f"  Exported to {path}", 5000)
 
     def _expand_all(self):
         widget = self.tab_widget.currentWidget()
