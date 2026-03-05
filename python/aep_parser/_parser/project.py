@@ -705,6 +705,8 @@ class ProjectParser:
             b = self._clamp_color(raw[3])
             a = min(1.0, max(0.0, raw[0]))
             return Color(r, g, b, a)
+        if len(raw) == 1:
+            return raw[0]
         return Vector(*raw) if len(raw) <= 3 else Vector(raw[0], raw[1], raw[2] if len(raw) > 2 else None)
 
     @staticmethod
