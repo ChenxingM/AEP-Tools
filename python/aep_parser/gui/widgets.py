@@ -102,9 +102,9 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
         ltype = resolve_layer_visual_type(layer, assets)
         label, color = LAYER_TYPE_LABELS.get(ltype, ("?", "#cccccc"))
 
-        layer_item.setText(0, str(i))
-        layer_item.setTextAlignment(0, Qt.AlignRight | Qt.AlignVCenter)
-        layer_item.setText(1, name)
+        layer_item.setText(0, name)
+        layer_item.setText(1, str(i))
+        layer_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
         layer_item.setData(0, ROLE_NODE_TYPE, "layer")
         layer_item.setData(0, ROLE_LAYER_ID, layer.get("id"))
         if ltype == "precomp":
@@ -118,12 +118,12 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
         font.setBold(True)
         layer_item.setFont(0, font)
         layer_item.setFont(1, font)
-        layer_item.setForeground(1, QColor(color))
+        layer_item.setForeground(0, QColor(color))
         layer_item.setForeground(2, COLOR_TEXT_DIM)
 
         flags = layer.get("flags", {})
         if not flags.get("visible", True):
-            layer_item.setForeground(1, QColor("#555555"))
+            layer_item.setForeground(0, QColor("#555555"))
 
         props = layer.get("properties", {})
         if isinstance(props, dict) and "properties" in props:
@@ -146,13 +146,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
         cur_path = match_path + [mn] if mn else match_path
         item = QTreeWidgetItem()
         display = _display_name(mn, val)
-        item.setText(1, display)
-        item.setToolTip(1, mn)
+        item.setText(0, display)
+        item.setToolTip(0, mn)
 
         if val is None:
             item.setData(0, ROLE_NODE_TYPE, "property")
             item.setData(0, ROLE_MATCH_PATH, cur_path)
-            item.setForeground(1, COLOR_TEXT_DIM)
+            item.setForeground(0, COLOR_TEXT_DIM)
             parent.addChild(item)
             continue
 
@@ -164,17 +164,17 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 if enabled is not None:
                     tag = "ON" if enabled else "OFF"
                     color = QColor("#4ec9b0") if enabled else QColor("#555555")
-                    item.setText(1, f"{display}  [{tag}]")
-                    item.setForeground(1, color)
+                    item.setText(0, f"{display}  [{tag}]")
+                    item.setForeground(0, color)
                 else:
-                    item.setForeground(1, COLOR_TEXT)
+                    item.setForeground(0, COLOR_TEXT)
                 _build_props(item, val["properties"], comp_in, comp_out, cur_path)
 
             # EffectInstance
             elif "parameters" in val and "name" in val:
                 item.setData(0, ROLE_NODE_TYPE, "effect")
-                item.setText(1, val.get("name", display))
-                item.setForeground(1, QColor("#dcdcaa"))
+                item.setText(0, val.get("name", display))
+                item.setForeground(0, QColor("#dcdcaa"))
                 params = val["parameters"]
                 if isinstance(params, dict) and "properties" in params:
                     _build_props(item, params["properties"], comp_in, comp_out,
@@ -188,13 +188,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 kfs = get_keyframes(val.get("documents", {}))
                 if kfs:
                     item.setData(3, ROLE_KEYFRAMES, kfs)
-                    item.setForeground(1, COLOR_TEXT_ANIM)
+                    item.setForeground(0, COLOR_TEXT_ANIM)
 
             # MaskData
             elif "mode" in val and "index" in val:
                 item.setData(0, ROLE_NODE_TYPE, "mask")
-                item.setText(1, f"{display} [{val.get('mode', 'add')}]")
-                item.setForeground(1, QColor("#b5cea8"))
+                item.setText(0, f"{display} [{val.get('mode', 'add')}]")
+                item.setForeground(0, QColor("#b5cea8"))
                 mask_props = val.get("properties")
                 if isinstance(mask_props, dict) and "properties" in mask_props:
                     _build_props(item, mask_props["properties"], comp_in, comp_out,
@@ -216,18 +216,18 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 kfs = get_keyframes(val)
                 if kfs:
                     item.setData(3, ROLE_KEYFRAMES, kfs)
-                    item.setForeground(1, COLOR_TEXT_ANIM)
+                    item.setForeground(0, COLOR_TEXT_ANIM)
                     item.setText(2, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
                 else:
-                    item.setForeground(1, COLOR_TEXT)
+                    item.setForeground(0, COLOR_TEXT)
 
                 if val.get("expression"):
-                    item.setText(1, f"{item.text(1)}  \u2261")
+                    item.setText(0, f"{item.text(0)}  \u2261")
 
             # Empty PropertyGroup (has 'key' but no 'properties')
             elif "key" in val:
                 item.setData(0, ROLE_NODE_TYPE, "group")
-                item.setForeground(1, COLOR_TEXT_DIM)
+                item.setForeground(0, COLOR_TEXT_DIM)
 
             else:
                 item.setText(2, fmt_val(val))
@@ -301,19 +301,19 @@ class CompWidget(QWidget):
         self.tree.setRootIsDecorated(True)
         self.tree.setExpandsOnDoubleClick(False)
         self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["#", "Layer", "Value", "Keyframes"])
+        self.tree.setHeaderLabels(["Layer", "#", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tree.setHorizontalScrollMode(QTreeWidget.ScrollPerPixel)
 
         header = self.tree.header()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
         header.setSectionResizeMode(2, QHeaderView.Interactive)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
-        header.resizeSection(0, 36)
-        header.resizeSection(1, 400)
+        header.resizeSection(0, 400)
+        header.resizeSection(1, 36)
         header.resizeSection(2, 220)
         header.setMinimumSectionSize(36)
 
@@ -366,7 +366,7 @@ class CompWidget(QWidget):
             menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _rename_layer(self, item: QTreeWidgetItem):
-        old_name = item.text(1)
+        old_name = item.text(0)
         new_name, ok = QInputDialog.getText(
             self, "Rename Layer", "Layer name:", text=old_name)
         if not ok or not new_name.strip():
@@ -375,7 +375,7 @@ class CompWidget(QWidget):
         layer_id = item.data(0, ROLE_LAYER_ID)
         comp_id = self.comp.get("id")
         self.tree.blockSignals(True)
-        item.setText(1, new_name)
+        item.setText(0, new_name)
         self.tree.blockSignals(False)
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_name(comp_id, layer_id, new_name)
