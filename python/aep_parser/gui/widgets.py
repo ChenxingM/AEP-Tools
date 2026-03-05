@@ -253,7 +253,7 @@ class CompWidget(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Property", "Value", "Keyframes"])
+        self.tree.setHeaderLabels(["Layer", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tree.setHorizontalScrollMode(QTreeWidget.ScrollPerPixel)
