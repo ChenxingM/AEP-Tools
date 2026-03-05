@@ -45,7 +45,7 @@ MASK_DIFFERENCE = 6
 _TRANSFORM_DEFAULTS = [
     ("ADBE Anchor Point", 2, 2, [0.0, 0.0]),
     ("ADBE Position", 2, 2, [0.0, 0.0]),
-    ("ADBE Scale", 3, 2, [100.0, 100.0]),
+    ("ADBE Scale", 3, 2, [1.0, 1.0]),
     ("ADBE Rotate Z", 3, 1, 0.0),
     ("ADBE Opacity", 3, 1, 1.0),
 ]
