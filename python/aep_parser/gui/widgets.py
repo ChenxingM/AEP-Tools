@@ -146,14 +146,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
         cur_path = match_path + [mn] if mn else match_path
         item = QTreeWidgetItem()
         display = _display_name(mn, val)
-        item.setText(0, display)
-        item.setToolTip(0, mn)
+        item.setText(1, display)
+        item.setToolTip(1, mn)
 
         if val is None:
             item.setData(0, ROLE_NODE_TYPE, "property")
             item.setData(0, ROLE_MATCH_PATH, cur_path)
-            item.setForeground(0, COLOR_TEXT_DIM)
-            item.setText(2, "")
+            item.setForeground(1, COLOR_TEXT_DIM)
             parent.addChild(item)
             continue
 
@@ -165,17 +164,17 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 if enabled is not None:
                     tag = "ON" if enabled else "OFF"
                     color = QColor("#4ec9b0") if enabled else QColor("#555555")
-                    item.setText(0, f"{display}  [{tag}]")
-                    item.setForeground(0, color)
+                    item.setText(1, f"{display}  [{tag}]")
+                    item.setForeground(1, color)
                 else:
-                    item.setForeground(0, COLOR_TEXT)
+                    item.setForeground(1, COLOR_TEXT)
                 _build_props(item, val["properties"], comp_in, comp_out, cur_path)
 
             # EffectInstance
             elif "parameters" in val and "name" in val:
                 item.setData(0, ROLE_NODE_TYPE, "effect")
-                item.setText(0, val.get("name", display))
-                item.setForeground(0, QColor("#dcdcaa"))
+                item.setText(1, val.get("name", display))
+                item.setForeground(1, QColor("#dcdcaa"))
                 params = val["parameters"]
                 if isinstance(params, dict) and "properties" in params:
                     _build_props(item, params["properties"], comp_in, comp_out,
@@ -189,13 +188,13 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 kfs = get_keyframes(val.get("documents", {}))
                 if kfs:
                     item.setData(3, ROLE_KEYFRAMES, kfs)
-                    item.setForeground(0, COLOR_TEXT_ANIM)
+                    item.setForeground(1, COLOR_TEXT_ANIM)
 
             # MaskData
             elif "mode" in val and "index" in val:
                 item.setData(0, ROLE_NODE_TYPE, "mask")
-                item.setText(0, f"{display} [{val.get('mode', 'add')}]")
-                item.setForeground(0, QColor("#b5cea8"))
+                item.setText(1, f"{display} [{val.get('mode', 'add')}]")
+                item.setForeground(1, QColor("#b5cea8"))
                 mask_props = val.get("properties")
                 if isinstance(mask_props, dict) and "properties" in mask_props:
                     _build_props(item, mask_props["properties"], comp_in, comp_out,
@@ -217,13 +216,18 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 kfs = get_keyframes(val)
                 if kfs:
                     item.setData(3, ROLE_KEYFRAMES, kfs)
-                    item.setForeground(0, COLOR_TEXT_ANIM)
+                    item.setForeground(1, COLOR_TEXT_ANIM)
                     item.setText(2, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
                 else:
-                    item.setForeground(0, COLOR_TEXT)
+                    item.setForeground(1, COLOR_TEXT)
 
                 if val.get("expression"):
-                    item.setText(0, f"{item.text(0)}  \u2261")
+                    item.setText(1, f"{item.text(1)}  \u2261")
+
+            # Empty PropertyGroup (has 'key' but no 'properties')
+            elif "key" in val:
+                item.setData(0, ROLE_NODE_TYPE, "group")
+                item.setForeground(1, COLOR_TEXT_DIM)
 
             else:
                 item.setText(2, fmt_val(val))
