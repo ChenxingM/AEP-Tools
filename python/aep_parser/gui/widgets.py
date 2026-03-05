@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint, QEvent
+from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint, QEvent, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPolygon
 from PySide6.QtWidgets import (
-    QHeaderView, QLabel, QStyle, QStyledItemDelegate,
+    QAbstractItemView, QHeaderView, QLabel, QStyle, QStyledItemDelegate,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -288,6 +288,7 @@ class CompWidget(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setExpandsOnDoubleClick(False)
+        self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Layer", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
@@ -334,7 +335,7 @@ class CompWidget(QWidget):
         self.tree.blockSignals(True)
         item.setText(0, name)
         self.tree.blockSignals(False)
-        self.tree.editItem(item, 0)
+        QTimer.singleShot(0, lambda: self.tree.editItem(item, 0))
 
     def eventFilter(self, obj, event):
         if obj is self.tree and event.type() == QEvent.KeyPress:
@@ -359,7 +360,7 @@ class CompWidget(QWidget):
         if col == 1 and self._writable and item.data(0, ROLE_MATCH_PATH):
             self._editing_item = item
             item.setFlags(item.flags() | Qt.ItemIsEditable)
-            self.tree.editItem(item, 1)
+            QTimer.singleShot(0, lambda: self.tree.editItem(item, 1))
 
     def _on_item_changed(self, item: QTreeWidgetItem, col: int):
         if self._editing_item is not item:
