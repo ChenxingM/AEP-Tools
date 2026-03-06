@@ -23,6 +23,10 @@ from ._writer import (
     save_aep, set_asset_path, set_comp_name, set_layer_name,
     set_property_value, set_keyframe_value, set_keyframe_time,
     set_keyframe_interpolation, set_keyframe_ease,
+    set_layer_flag, set_layer_label, set_layer_blend_mode,
+    set_layer_track_matte, set_layer_quality, set_layer_time_field,
+    set_comp_dimensions, set_comp_bgcolor, set_comp_framerate,
+    set_comp_duration,
 )
 
 

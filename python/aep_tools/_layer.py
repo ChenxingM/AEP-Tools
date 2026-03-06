@@ -85,9 +85,29 @@ class Layer:
     def containing_comp(self) -> CompItem | None:
         return self._containing_comp
 
-    @_property
-    def label(self) -> int:
-        return self._model.label_color
+    # ── Write helpers ──
+
+    def _write_flag(self, model_attr: str, flag_name: str, value: bool) -> None:
+        """Update a boolean flag on the model and in the chunk tree."""
+        setattr(self._model, model_attr, value)
+        if self._containing_comp is not None:
+            project = getattr(self._containing_comp, '_project', None)
+            if project is not None and project._chunk_tree is not None:
+                from ._writer import set_layer_flag
+                set_layer_flag(project._chunk_tree,
+                               self._containing_comp.id, self._model.id,
+                               flag_name, value, project._big_endian)
+
+    def _write_ldta_field(self, writer_fn_name: str, *args) -> None:
+        """Call a writer function with (root, comp_id, layer_id, *args, big_endian)."""
+        if self._containing_comp is not None:
+            project = getattr(self._containing_comp, '_project', None)
+            if project is not None and project._chunk_tree is not None:
+                import importlib
+                mod = importlib.import_module('._writer', package='aep_tools')
+                fn = getattr(mod, writer_fn_name)
+                fn(project._chunk_tree, self._containing_comp.id,
+                   self._model.id, *args, project._big_endian)
 
     # Flags
 
@@ -95,17 +115,33 @@ class Layer:
     def enabled(self) -> bool:
         return self._model.visible
 
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._write_flag('visible', 'visible', value)
+
     @_property
     def solo(self) -> bool:
         return self._model.solo
+
+    @solo.setter
+    def solo(self, value: bool) -> None:
+        self._write_flag('solo', 'solo', value)
 
     @_property
     def shy(self) -> bool:
         return self._model.shy
 
+    @shy.setter
+    def shy(self, value: bool) -> None:
+        self._write_flag('shy', 'shy', value)
+
     @_property
     def locked(self) -> bool:
         return self._model.locked
+
+    @locked.setter
+    def locked(self, value: bool) -> None:
+        self._write_flag('locked', 'locked', value)
 
     # Timing
 
@@ -113,17 +149,37 @@ class Layer:
     def in_point(self) -> float:
         return self._model.in_time
 
+    @in_point.setter
+    def in_point(self, value: float) -> None:
+        self._model.in_time = value
+        self._write_ldta_field('set_layer_time_field', 'in_time', value)
+
     @_property
     def out_point(self) -> float:
         return self._model.out_time
+
+    @out_point.setter
+    def out_point(self, value: float) -> None:
+        self._model.out_time = value
+        self._write_ldta_field('set_layer_time_field', 'out_time', value)
 
     @_property
     def start_time(self) -> float:
         return self._model.start_time
 
+    @start_time.setter
+    def start_time(self, value: float) -> None:
+        self._model.start_time = value
+        self._write_ldta_field('set_layer_time_field', 'start_time', value)
+
     @_property
     def stretch(self) -> float:
         return self._model.time_stretch
+
+    @stretch.setter
+    def stretch(self, value: float) -> None:
+        self._model.time_stretch = value
+        self._write_ldta_field('set_layer_time_field', 'time_stretch', value)
 
     # Layer type flags
 
@@ -131,21 +187,41 @@ class Layer:
     def null_layer(self) -> bool:
         return self._model.is_null
 
+    @null_layer.setter
+    def null_layer(self, value: bool) -> None:
+        self._write_flag('is_null', 'is_null', value)
+
     @_property
     def guide_layer(self) -> bool:
         return self._model.is_guide
+
+    @guide_layer.setter
+    def guide_layer(self, value: bool) -> None:
+        self._write_flag('is_guide', 'is_guide', value)
 
     @_property
     def adjustment_layer(self) -> bool:
         return self._model.is_adjustment
 
+    @adjustment_layer.setter
+    def adjustment_layer(self, value: bool) -> None:
+        self._write_flag('is_adjustment', 'is_adjustment', value)
+
     @_property
     def three_d_layer(self) -> bool:
         return self._model.threedimensional
 
+    @three_d_layer.setter
+    def three_d_layer(self, value: bool) -> None:
+        self._write_flag('threedimensional', 'threedimensional', value)
+
     @_property
     def auto_orient(self) -> bool:
         return self._model.auto_orient
+
+    @auto_orient.setter
+    def auto_orient(self, value: bool) -> None:
+        self._write_flag('auto_orient', 'auto_orient', value)
 
     @_property
     def blending_mode(self) -> BlendingMode | int:
@@ -154,6 +230,11 @@ class Layer:
         except ValueError:
             return self._model.blend_mode
 
+    @blending_mode.setter
+    def blending_mode(self, value: BlendingMode | int) -> None:
+        self._model.blend_mode = int(value)
+        self._write_ldta_field('set_layer_blend_mode', int(value))
+
     @_property
     def track_matte_type(self) -> TrackMatteType | int:
         try:
@@ -161,25 +242,60 @@ class Layer:
         except ValueError:
             return self._model.matte_mode
 
+    @track_matte_type.setter
+    def track_matte_type(self, value: TrackMatteType | int) -> None:
+        self._model.matte_mode = int(value)
+        self._write_ldta_field('set_layer_track_matte', int(value))
+
     @_property
     def effects_active(self) -> bool:
         return self._model.effects_enabled
+
+    @effects_active.setter
+    def effects_active(self, value: bool) -> None:
+        self._write_flag('effects_enabled', 'effects_enabled', value)
 
     @_property
     def motion_blur(self) -> bool:
         return self._model.motion_blur_enabled
 
+    @motion_blur.setter
+    def motion_blur(self, value: bool) -> None:
+        self._write_flag('motion_blur_enabled', 'motion_blur_enabled', value)
+
     @_property
     def quality(self) -> LayerQuality:
         return LayerQuality(self._model.quality)
+
+    @quality.setter
+    def quality(self, value: LayerQuality | int) -> None:
+        self._model.quality = int(value)
+        self._write_ldta_field('set_layer_quality', int(value))
 
     @_property
     def sampling_quality(self) -> bool:
         return self._model.bicubic_sampling
 
+    @sampling_quality.setter
+    def sampling_quality(self, value: bool) -> None:
+        self._write_flag('bicubic_sampling', 'bicubic_sampling', value)
+
     @_property
     def collapse_transformation(self) -> bool:
         return self._model.continuously_rasterize
+
+    @collapse_transformation.setter
+    def collapse_transformation(self, value: bool) -> None:
+        self._write_flag('continuously_rasterize', 'continuously_rasterize', value)
+
+    @_property
+    def label(self) -> int:
+        return self._model.label_color
+
+    @label.setter
+    def label(self, value: int) -> None:
+        self._model.label_color = value
+        self._write_ldta_field('set_layer_label', value)
 
     # Parent
 

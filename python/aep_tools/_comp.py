@@ -83,21 +83,50 @@ class CompItem:
             set_comp_name(self._project._chunk_tree, self._model.id,
                           new_name, self._project._big_endian)
 
+    def _write_cdta(self, writer_fn_name: str, *args) -> None:
+        """Call a cdta writer function with (root, comp_id, *args, big_endian)."""
+        if self._project is not None and self._project._chunk_tree is not None:
+            import importlib
+            mod = importlib.import_module('._writer', package='aep_tools')
+            fn = getattr(mod, writer_fn_name)
+            fn(self._project._chunk_tree, self._model.id,
+               *args, self._project._big_endian)
+
     @property
     def width(self) -> int:
         return self._model.width
+
+    @width.setter
+    def width(self, value: int) -> None:
+        self._model.width = value
+        self._write_cdta('set_comp_dimensions', value, self._model.height)
 
     @property
     def height(self) -> int:
         return self._model.height
 
+    @height.setter
+    def height(self, value: int) -> None:
+        self._model.height = value
+        self._write_cdta('set_comp_dimensions', self._model.width, value)
+
     @property
     def duration(self) -> float:
         return self._model.duration
 
+    @duration.setter
+    def duration(self, value: float) -> None:
+        self._model.duration = value
+        self._write_cdta('set_comp_duration', value)
+
     @property
     def frame_rate(self) -> float:
         return self._model.framerate
+
+    @frame_rate.setter
+    def frame_rate(self, value: float) -> None:
+        self._model.framerate = value
+        self._write_cdta('set_comp_framerate', value)
 
     @property
     def frame_duration(self) -> float:
@@ -115,6 +144,14 @@ class CompItem:
     def bg_color(self) -> list[float]:
         c = self._model.color
         return [c.r, c.g, c.b]
+
+    @bg_color.setter
+    def bg_color(self, value: list[float]) -> None:
+        self._model.color.r = value[0]
+        self._model.color.g = value[1]
+        self._model.color.b = value[2]
+        self._write_cdta('set_comp_bgcolor', int(value[0]), int(value[1]),
+                         int(value[2]))
 
     # Layers
 

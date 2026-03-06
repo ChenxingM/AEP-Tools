@@ -69,14 +69,14 @@ Represents a composition.
 | `name` | `str` | R/W | Composition name |
 | `id` | `int` | R | Internal ID |
 | `type_name` | `str` | R | Always `"Composition"` |
-| `width` | `int` | R | Width in pixels |
-| `height` | `int` | R | Height in pixels |
-| `duration` | `float` | R | Duration (seconds) |
-| `frame_rate` | `float` | R | Frames per second |
+| `width` | `int` | R/W | Width in pixels |
+| `height` | `int` | R/W | Height in pixels |
+| `duration` | `float` | R/W | Duration (seconds) |
+| `frame_rate` | `float` | R/W | Frames per second |
 | `frame_duration` | `float` | R | Duration of one frame (`1/frame_rate`) |
 | `work_area_start` | `float` | R | Work area start (seconds) |
 | `work_area_duration` | `float` | R | Work area duration (seconds) |
-| `bg_color` | `list[float]` | R | Background color `[r, g, b]` |
+| `bg_color` | `list[float]` | R/W | Background color `[r, g, b]` |
 | `num_layers` | `int` | R | Number of layers |
 | `layers` | `LayerCollection` | R | All layers (1-based) |
 | `marker_property` | `MarkerProperty \| None` | R | Composition markers |
@@ -92,7 +92,10 @@ Represents a composition.
 ```python
 comp = proj.comp("Main Comp")
 comp.name = "Renamed"
-print(f"{comp.width}x{comp.height} @ {comp.frame_rate}fps")
+comp.width = 3840
+comp.height = 2160
+comp.frame_rate = 60.0
+comp.bg_color = [0, 0, 0]
 
 for layer in comp.layers:
     print(layer.name)
@@ -111,27 +114,27 @@ Base class for all layers. Subtypes: `AVLayer`, `TextLayer`, `ShapeLayer`, `Came
 | `index` | `int` | R | 1-based index in composition |
 | `name` | `str` | R/W | Layer name |
 | `containing_comp` | `CompItem \| None` | R | Parent composition |
-| `label` | `int` | R | Label color index |
-| `enabled` | `bool` | R | Visibility (eye icon) |
-| `solo` | `bool` | R | Solo |
-| `shy` | `bool` | R | Shy |
-| `locked` | `bool` | R | Locked |
-| `null_layer` | `bool` | R | Is null object |
-| `guide_layer` | `bool` | R | Is guide layer |
-| `adjustment_layer` | `bool` | R | Is adjustment layer |
-| `three_d_layer` | `bool` | R | 3D layer |
-| `auto_orient` | `bool` | R | Auto-orient |
-| `effects_active` | `bool` | R | Effects enabled |
-| `motion_blur` | `bool` | R | Motion blur |
-| `collapse_transformation` | `bool` | R | Collapse / Continuously rasterize |
-| `sampling_quality` | `bool` | R | Bicubic sampling |
-| `in_point` | `float` | R | In point (seconds) |
-| `out_point` | `float` | R | Out point (seconds) |
-| `start_time` | `float` | R | Start time (seconds) |
-| `stretch` | `float` | R | Time stretch factor |
-| `blending_mode` | `BlendingMode` | R | Blending mode |
-| `track_matte_type` | `TrackMatteType` | R | Track matte type |
-| `quality` | `LayerQuality` | R | Render quality |
+| `label` | `int` | R/W | Label color index |
+| `enabled` | `bool` | R/W | Visibility (eye icon) |
+| `solo` | `bool` | R/W | Solo |
+| `shy` | `bool` | R/W | Shy |
+| `locked` | `bool` | R/W | Locked |
+| `null_layer` | `bool` | R/W | Is null object |
+| `guide_layer` | `bool` | R/W | Is guide layer |
+| `adjustment_layer` | `bool` | R/W | Is adjustment layer |
+| `three_d_layer` | `bool` | R/W | 3D layer |
+| `auto_orient` | `bool` | R/W | Auto-orient |
+| `effects_active` | `bool` | R/W | Effects enabled |
+| `motion_blur` | `bool` | R/W | Motion blur |
+| `collapse_transformation` | `bool` | R/W | Collapse / Continuously rasterize |
+| `sampling_quality` | `bool` | R/W | Bicubic sampling |
+| `in_point` | `float` | R/W | In point (seconds) |
+| `out_point` | `float` | R/W | Out point (seconds) |
+| `start_time` | `float` | R/W | Start time (seconds) |
+| `stretch` | `float` | R/W | Time stretch factor |
+| `blending_mode` | `BlendingMode` | R/W | Blending mode |
+| `track_matte_type` | `TrackMatteType` | R/W | Track matte type |
+| `quality` | `LayerQuality` | R/W | Render quality |
 | `parent` | `Layer \| None` | R | Parent layer |
 | `num_properties` | `int` | R | Number of top-level property groups |
 | `num_effects` | `int` | R | Number of effects |
@@ -185,7 +188,12 @@ layer = comp.layer(1)
 layer.name = "Background"
 print(layer.position.value)       # [960, 540]
 print(layer.opacity.value)        # 1.0
-print(layer.in_point)             # 0.0
+
+# Flags & timing
+layer.enabled = False
+layer.three_d_layer = True
+layer.in_point = 1.0
+layer.blending_mode = BlendingMode.MULTIPLY
 
 # Chaining
 layer("Transform")("Position").value

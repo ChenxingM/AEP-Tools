@@ -845,6 +845,232 @@ def set_keyframe_ease(root: Chunk, comp_id: int, layer_id: int,
     return True
 
 
+# ── ldta / cdta field writers ──────────────────────────────────────────────
+
+
+# Flag name → (byte_index within 4-byte flags field, bit_index)
+_FLAG_MAP: dict[str, tuple[int, int]] = {
+    'is_guide':               (1, 1),
+    'bicubic_sampling':       (1, 6),
+    'auto_orient':            (2, 0),
+    'is_adjustment':          (2, 1),
+    'threedimensional':       (2, 2),
+    'solo':                   (2, 3),
+    'is_null':                (2, 7),
+    'visible':                (3, 0),
+    'effects_enabled':        (3, 2),
+    'motion_blur_enabled':    (3, 3),
+    'locked':                 (3, 5),
+    'shy':                    (3, 6),
+    'continuously_rasterize': (3, 7),
+}
+
+_LDTA_FLAGS_OFF = 36
+
+
+def _find_ldta(root: Chunk, comp_id: int, layer_id: int,
+               big_endian: bool) -> Chunk | None:
+    """Find the ldta chunk for a layer."""
+    comp_cl = find_comp_chunklist(root, comp_id, big_endian)
+    if comp_cl is None:
+        return None
+    layer_chunk = find_layer_chunk(comp_cl, layer_id, big_endian)
+    if layer_chunk is None:
+        return None
+    ldta = layer_chunk.list.find_optional("ldta")
+    if ldta is not None and isinstance(ldta.data, (bytes, bytearray)):
+        return ldta
+    return None
+
+
+def set_layer_flag(root: Chunk, comp_id: int, layer_id: int,
+                   flag_name: str, value: bool, big_endian: bool) -> bool:
+    """Set a boolean flag in the ldta chunk."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    mapping = _FLAG_MAP.get(flag_name)
+    if mapping is None:
+        return False
+    byte_idx, bit_idx = mapping
+    offset = _LDTA_FLAGS_OFF + byte_idx
+    data = bytearray(ldta.data)
+    if value:
+        data[offset] |= (1 << bit_idx)
+    else:
+        data[offset] &= ~(1 << bit_idx)
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_label(root: Chunk, comp_id: int, layer_id: int,
+                    label: int, big_endian: bool) -> bool:
+    """Set a layer's label color index (uint8 at ldta offset 61)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    data = bytearray(ldta.data)
+    data[61] = label & 0xFF
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_blend_mode(root: Chunk, comp_id: int, layer_id: int,
+                         mode: int, big_endian: bool) -> bool:
+    """Set a layer's blend mode (uint32 at ldta offset 96)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    fmt = ">I" if big_endian else "<I"
+    data = bytearray(ldta.data)
+    struct.pack_into(fmt, data, 96, int(mode))
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_track_matte(root: Chunk, comp_id: int, layer_id: int,
+                          matte_type: int, big_endian: bool) -> bool:
+    """Set a layer's track matte type (uint32 at ldta offset 104)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    fmt = ">I" if big_endian else "<I"
+    data = bytearray(ldta.data)
+    struct.pack_into(fmt, data, 104, int(matte_type))
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_quality(root: Chunk, comp_id: int, layer_id: int,
+                      quality: int, big_endian: bool) -> bool:
+    """Set a layer's quality (uint16 at ldta offset 4)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    fmt = ">H" if big_endian else "<H"
+    data = bytearray(ldta.data)
+    struct.pack_into(fmt, data, 4, int(quality))
+    ldta.data = bytes(data)
+    return True
+
+
+# Time fields in ldta stored as rational numbers (numerator / denominator).
+# time_stretch denominator is uint16 at a separate offset.
+_LDTA_TIME_FIELDS: dict[str, tuple[int, int, str]] = {
+    # field → (num_offset, den_offset, den_struct_format)
+    'in_time':      (20, 24, 'I'),
+    'out_time':     (28, 32, 'I'),
+    'start_time':   (12, 16, 'I'),
+    'time_stretch': (8, 110, 'H'),
+}
+
+
+def set_layer_time_field(root: Chunk, comp_id: int, layer_id: int,
+                         field: str, value: float,
+                         big_endian: bool) -> bool:
+    """Set a layer time field (in_time, out_time, start_time, time_stretch).
+
+    Reads the existing denominator and adjusts the numerator.
+    """
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    offsets = _LDTA_TIME_FIELDS.get(field)
+    if offsets is None:
+        return False
+    num_off, den_off, den_fmt = offsets
+    fmt = ">" if big_endian else "<"
+    data = bytearray(ldta.data)
+    den = struct.unpack_from(f"{fmt}{den_fmt}", data, den_off)[0]
+    if den == 0:
+        return False
+    new_num = int(round(value * den))
+    struct.pack_into(f"{fmt}i", data, num_off, new_num)
+    ldta.data = bytes(data)
+    return True
+
+
+# ── cdta helpers ──────────────────────────────────────────────────────────
+
+
+def _find_cdta(root: Chunk, comp_id: int, big_endian: bool) -> Chunk | None:
+    """Find the cdta chunk for a composition."""
+    comp_cl = find_comp_chunklist(root, comp_id, big_endian)
+    if comp_cl is None:
+        return None
+    cdta = comp_cl.find_optional("cdta")
+    if cdta is not None and isinstance(cdta.data, (bytes, bytearray)):
+        return cdta
+    return None
+
+
+def set_comp_dimensions(root: Chunk, comp_id: int, width: int, height: int,
+                        big_endian: bool) -> bool:
+    """Set composition width and height (uint16 each at cdta offset 140/142)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    struct.pack_into(f"{fmt}HH", data, 140, width, height)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_bgcolor(root: Chunk, comp_id: int,
+                     r: int, g: int, b: int, big_endian: bool) -> bool:
+    """Set composition background color (3 bytes at cdta offset 52)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    data = bytearray(cdta.data)
+    data[52] = int(r) & 0xFF
+    data[53] = int(g) & 0xFF
+    data[54] = int(b) & 0xFF
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_framerate(root: Chunk, comp_id: int, framerate: float,
+                       big_endian: bool) -> bool:
+    """Set composition frame rate by adjusting numerator (cdta offset 4-11)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    time_denom = struct.unpack_from(f"{fmt}I", data, 4)[0]
+    if time_denom == 0:
+        time_denom = 1
+    new_num = int(round(framerate * time_denom))
+    struct.pack_into(f"{fmt}I", data, 8, new_num)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_duration(root: Chunk, comp_id: int, duration: float,
+                      big_endian: bool) -> bool:
+    """Set composition duration (cdta offset 45).
+
+    Reads the existing divisor and frame rate to compute the raw frame count.
+    """
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    time_denom = struct.unpack_from(f"{fmt}I", data, 4)[0]
+    time_num = struct.unpack_from(f"{fmt}I", data, 8)[0]
+    framerate = time_num / time_denom if time_denom else 30.0
+    raw_dur_div = struct.unpack_from(f"{fmt}H", data, 49)[0]
+    if raw_dur_div == 0 or framerate == 0:
+        return False
+    new_raw = int(round(duration * raw_dur_div / framerate))
+    struct.pack_into(f"{fmt}H", data, 45, new_raw)
+    cdta.data = bytes(data)
+    return True
+
+
 # High-level Save
 
 

@@ -67,14 +67,14 @@ proj.save("output.aep")
 | `name` | `str` | R/W | 合成名称 |
 | `id` | `int` | R | 内部 ID |
 | `type_name` | `str` | R | 固定为 `"Composition"` |
-| `width` | `int` | R | 宽度（像素） |
-| `height` | `int` | R | 高度（像素） |
-| `duration` | `float` | R | 时长（秒） |
-| `frame_rate` | `float` | R | 帧率 |
+| `width` | `int` | R/W | 宽度（像素） |
+| `height` | `int` | R/W | 高度（像素） |
+| `duration` | `float` | R/W | 时长（秒） |
+| `frame_rate` | `float` | R/W | 帧率 |
 | `frame_duration` | `float` | R | 单帧时长（`1/frame_rate`） |
 | `work_area_start` | `float` | R | 工作区起始（秒） |
 | `work_area_duration` | `float` | R | 工作区时长（秒） |
-| `bg_color` | `list[float]` | R | 背景颜色 `[r, g, b]` |
+| `bg_color` | `list[float]` | R/W | 背景颜色 `[r, g, b]` |
 | `num_layers` | `int` | R | 图层数量 |
 | `layers` | `LayerCollection` | R | 所有图层（1-based） |
 | `marker_property` | `MarkerProperty \| None` | R | 合成标记 |
@@ -90,7 +90,10 @@ proj.save("output.aep")
 ```python
 comp = proj.comp("Main Comp")
 comp.name = "重命名合成"
-print(f"{comp.width}x{comp.height} @ {comp.frame_rate}fps")
+comp.width = 3840
+comp.height = 2160
+comp.frame_rate = 60.0
+comp.bg_color = [0, 0, 0]
 
 for layer in comp.layers:
     print(layer.name)
@@ -109,27 +112,27 @@ for layer in comp.layers:
 | `index` | `int` | R | 合成中的 1-based 索引 |
 | `name` | `str` | R/W | 图层名称 |
 | `containing_comp` | `CompItem \| None` | R | 所属合成 |
-| `label` | `int` | R | 标签颜色索引 |
-| `enabled` | `bool` | R | 可见性（眼睛图标） |
-| `solo` | `bool` | R | 独奏 |
-| `shy` | `bool` | R | 害羞 |
-| `locked` | `bool` | R | 锁定 |
-| `null_layer` | `bool` | R | 是否空对象 |
-| `guide_layer` | `bool` | R | 是否参考线图层 |
-| `adjustment_layer` | `bool` | R | 是否调整图层 |
-| `three_d_layer` | `bool` | R | 3D 图层 |
-| `auto_orient` | `bool` | R | 自动朝向 |
-| `effects_active` | `bool` | R | 效果启用 |
-| `motion_blur` | `bool` | R | 运动模糊 |
-| `collapse_transformation` | `bool` | R | 折叠变换 / 连续光栅化 |
-| `sampling_quality` | `bool` | R | 双立方采样 |
-| `in_point` | `float` | R | 入点（秒） |
-| `out_point` | `float` | R | 出点（秒） |
-| `start_time` | `float` | R | 起始时间（秒） |
-| `stretch` | `float` | R | 时间拉伸因子 |
-| `blending_mode` | `BlendingMode` | R | 混合模式 |
-| `track_matte_type` | `TrackMatteType` | R | 轨道遮罩类型 |
-| `quality` | `LayerQuality` | R | 渲染质量 |
+| `label` | `int` | R/W | 标签颜色索引 |
+| `enabled` | `bool` | R/W | 可见性（眼睛图标） |
+| `solo` | `bool` | R/W | 独奏 |
+| `shy` | `bool` | R/W | 害羞 |
+| `locked` | `bool` | R/W | 锁定 |
+| `null_layer` | `bool` | R/W | 是否空对象 |
+| `guide_layer` | `bool` | R/W | 是否参考线图层 |
+| `adjustment_layer` | `bool` | R/W | 是否调整图层 |
+| `three_d_layer` | `bool` | R/W | 3D 图层 |
+| `auto_orient` | `bool` | R/W | 自动朝向 |
+| `effects_active` | `bool` | R/W | 效果启用 |
+| `motion_blur` | `bool` | R/W | 运动模糊 |
+| `collapse_transformation` | `bool` | R/W | 折叠变换 / 连续光栅化 |
+| `sampling_quality` | `bool` | R/W | 双立方采样 |
+| `in_point` | `float` | R/W | 入点（秒） |
+| `out_point` | `float` | R/W | 出点（秒） |
+| `start_time` | `float` | R/W | 起始时间（秒） |
+| `stretch` | `float` | R/W | 时间拉伸因子 |
+| `blending_mode` | `BlendingMode` | R/W | 混合模式 |
+| `track_matte_type` | `TrackMatteType` | R/W | 轨道遮罩类型 |
+| `quality` | `LayerQuality` | R/W | 渲染质量 |
 | `parent` | `Layer \| None` | R | 父图层 |
 | `num_properties` | `int` | R | 顶层属性组数量 |
 | `num_effects` | `int` | R | 效果数量 |
@@ -183,7 +186,12 @@ layer = comp.layer(1)
 layer.name = "背景"
 print(layer.position.value)       # [960, 540]
 print(layer.opacity.value)        # 1.0
-print(layer.in_point)             # 0.0
+
+# 标志和时间
+layer.enabled = False
+layer.three_d_layer = True
+layer.in_point = 1.0
+layer.blending_mode = BlendingMode.MULTIPLY
 
 # 链式访问
 layer("Transform")("Position").value
