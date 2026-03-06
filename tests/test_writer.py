@@ -245,11 +245,20 @@ class TestSetPropertyValue:
         values = struct.unpack(">d", cdat.data)
         assert values == (50.0,)
 
-    def test_nonexistent_property(self):
+    def test_nonexistent_property_with_template_creates_it(self):
         root = _build_test_chunk_tree()
         result = set_property_value(
             root, 100, 10,
             ["ADBE Transform Group", "ADBE Rotate Z"],
+            45.0, True)
+        # ADBE Rotate Z has a template, so it should be auto-created
+        assert result is True
+
+    def test_nonexistent_property_no_template(self):
+        root = _build_test_chunk_tree()
+        result = set_property_value(
+            root, 100, 10,
+            ["ADBE Transform Group", "ADBE Nonexistent Prop"],
             45.0, True)
         assert result is False
 
