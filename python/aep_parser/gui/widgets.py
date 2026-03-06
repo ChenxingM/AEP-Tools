@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .theme import (
     ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID, ROLE_LAYER_ID, ROLE_MATCH_PATH,
+    ROLE_KEY_INDEX, ROLE_KEY_DATA,
     COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
     fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
@@ -218,6 +219,7 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                     item.setData(3, ROLE_KEYFRAMES, kfs)
                     item.setForeground(0, COLOR_TEXT_ANIM)
                     item.setText(2, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
+                    _build_keyframe_children(item, kfs)
                 else:
                     item.setForeground(0, COLOR_TEXT)
 
@@ -235,6 +237,98 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
             item.setText(2, fmt_val(val))
 
         parent.addChild(item)
+
+
+def _fmt_interp(trans: str, bezier_mode: str = "normal") -> str:
+    if trans == "bezier" and bezier_mode != "normal":
+        return f"bezier ({bezier_mode})"
+    return trans
+
+
+def _build_keyframe_children(parent: QTreeWidgetItem, kfs: list[dict]):
+    """Add child items for each keyframe showing time, type, value, and easing."""
+    for i, kf in enumerate(kfs, 1):
+        time = kf.get("time", 0)
+        value = kf.get("value")
+        out_trans = kf.get("transitionType", "linear")
+        bezier_mode = kf.get("bezierMode", "normal")
+
+        # In interpolation = previous keyframe's transitionType
+        if i > 1:
+            prev = kfs[i - 2]
+            in_trans = prev.get("transitionType", "linear")
+            in_bm = prev.get("bezierMode", "normal")
+            in_str = _fmt_interp(in_trans, in_bm)
+        else:
+            in_str = None
+
+        out_str = _fmt_interp(out_trans, bezier_mode)
+
+        # Header: keyframe index + time + in/out types
+        label = f"\u25c6 Key {i}"
+        if in_str is not None:
+            interp_text = f"in:{in_str} out:{out_str}"
+        else:
+            interp_text = f"out:{out_str}"
+
+        kf_item = QTreeWidgetItem()
+        kf_item.setText(0, label)
+        kf_item.setText(2, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
+        color = COLOR_KF_HOLD if out_trans == "hold" else COLOR_KF
+        kf_item.setForeground(0, color)
+        kf_item.setForeground(2, COLOR_TEXT_DIM)
+        kf_item.setData(0, ROLE_NODE_TYPE, "keyframe")
+        kf_item.setData(0, ROLE_KEY_INDEX, i)
+        kf_item.setData(0, ROLE_KEY_DATA, kf)
+
+        # Temporal ease
+        in_speed = kf.get("inSpeed")
+        in_influence = kf.get("inInfluence")
+        out_speed = kf.get("outSpeed")
+        out_influence = kf.get("outInfluence")
+        if in_speed or out_speed:
+            ease_parts = []
+            if in_speed:
+                pairs = [f"({s:g}, {inf:g}%)"
+                         for s, inf in zip(in_speed, in_influence or [0] * len(in_speed))]
+                ease_parts.append(f"In: {' '.join(pairs)}")
+            if out_speed:
+                pairs = [f"({s:g}, {inf:g}%)"
+                         for s, inf in zip(out_speed, out_influence or [0] * len(out_speed))]
+                ease_parts.append(f"Out: {' '.join(pairs)}")
+            ease_item = QTreeWidgetItem()
+            ease_item.setText(0, "Temporal Ease")
+            ease_item.setText(2, "  |  ".join(ease_parts))
+            ease_item.setForeground(0, COLOR_TEXT_DIM)
+            ease_item.setForeground(2, COLOR_TEXT_DIM)
+            kf_item.addChild(ease_item)
+
+        # Spatial tangents
+        in_tan = kf.get("inTangent")
+        out_tan = kf.get("outTangent")
+        if in_tan or out_tan:
+            tan_item = QTreeWidgetItem()
+            tan_item.setText(0, "Spatial Tangent")
+            parts = []
+            if in_tan:
+                parts.append(f"In: {fmt_val(in_tan)}")
+            if out_tan:
+                parts.append(f"Out: {fmt_val(out_tan)}")
+            tan_item.setText(2, "  |  ".join(parts))
+            tan_item.setForeground(0, COLOR_TEXT_DIM)
+            tan_item.setForeground(2, COLOR_TEXT_DIM)
+            kf_item.addChild(tan_item)
+
+        # Roving
+        if kf.get("roving"):
+            rov_item = QTreeWidgetItem()
+            rov_item.setText(0, "Roving")
+            rov_item.setText(2, "Yes")
+            rov_item.setForeground(0, COLOR_TEXT_DIM)
+            rov_item.setForeground(2, COLOR_TEXT_DIM)
+            kf_item.addChild(rov_item)
+
+        parent.addChild(kf_item)
 
 
 def _parse_value_text(text: str) -> list[float] | float | None:
@@ -356,6 +450,20 @@ class CompWidget(QWidget):
         if match_path and self._writable:
             menu.addAction("Edit Value", lambda: self._edit_property(item))
 
+        # Keyframe editing
+        if node_type == "keyframe" and self._writable:
+            menu.addAction("Edit Value", lambda: self._edit_kf_value(item))
+            menu.addAction("Edit Time", lambda: self._edit_kf_time(item))
+            menu.addAction("Edit Temporal Ease", lambda: self._edit_kf_ease(item))
+            in_menu = menu.addMenu("In Interpolation")
+            in_menu.addAction("Linear", lambda: self._set_kf_in_interp(item, 1))
+            in_menu.addAction("Bezier", lambda: self._set_kf_in_interp(item, 2))
+            in_menu.addAction("Hold", lambda: self._set_kf_in_interp(item, 3))
+            out_menu = menu.addMenu("Out Interpolation")
+            out_menu.addAction("Linear", lambda: self._set_kf_interp(item, 1))
+            out_menu.addAction("Bezier", lambda: self._set_kf_interp(item, 2))
+            out_menu.addAction("Hold", lambda: self._set_kf_interp(item, 3))
+
         # Pre-comp navigation
         asset_id = item.data(0, ROLE_ASSET_ID)
         if asset_id is not None:
@@ -407,6 +515,207 @@ class CompWidget(QWidget):
             self._tools_project.change_property_value(
                 comp_id, layer_id, match_path, new_value)
 
+    def _find_kf_context(self, item: QTreeWidgetItem):
+        """Walk up from a keyframe item to find layer_id and match_path."""
+        key_index = item.data(0, ROLE_KEY_INDEX)
+        if key_index is None:
+            return None
+        # Walk up to find the property item (parent of keyframe)
+        prop_item = item.parent()
+        if prop_item is None:
+            return None
+        match_path = prop_item.data(0, ROLE_MATCH_PATH)
+        if not match_path:
+            return None
+        # Walk up to find the layer item
+        layer_item = prop_item
+        while layer_item and layer_item.data(0, ROLE_NODE_TYPE) != "layer":
+            layer_item = layer_item.parent()
+        if not layer_item:
+            return None
+        layer_id = layer_item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is None or comp_id is None:
+            return None
+        return comp_id, layer_id, match_path, key_index
+
+    def _update_kf_display(self, item: QTreeWidgetItem, kf_data: dict):
+        """Refresh a keyframe item's display text after editing."""
+        time = kf_data.get("time", 0)
+        value = kf_data.get("value")
+        out_trans = kf_data.get("transitionType", "linear")
+        bezier_mode = kf_data.get("bezierMode", "normal")
+        out_str = _fmt_interp(out_trans, bezier_mode)
+
+        # Determine in interpolation from the previous sibling's data
+        key_index = item.data(0, ROLE_KEY_INDEX) or 1
+        in_str = None
+        if key_index > 1:
+            parent = item.parent()
+            if parent is not None:
+                prev_item = parent.child(key_index - 2)
+                if prev_item is not None:
+                    prev_data = prev_item.data(0, ROLE_KEY_DATA) or {}
+                    in_str = _fmt_interp(
+                        prev_data.get("transitionType", "linear"),
+                        prev_data.get("bezierMode", "normal"))
+
+        if in_str is not None:
+            interp_text = f"in:{in_str} out:{out_str}"
+        else:
+            interp_text = f"out:{out_str}"
+
+        item.setText(2, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
+        color = COLOR_KF_HOLD if out_trans == "hold" else COLOR_KF
+        item.setForeground(0, color)
+        item.setData(0, ROLE_KEY_DATA, kf_data)
+
+    def _edit_kf_value(self, item: QTreeWidgetItem):
+        ctx = self._find_kf_context(item)
+        if ctx is None:
+            return
+        comp_id, layer_id, match_path, key_index = ctx
+        kf_data = item.data(0, ROLE_KEY_DATA)
+        old_val = fmt_val(kf_data.get("value")) if kf_data else ""
+        new_text, ok = QInputDialog.getText(
+            self, "Edit Keyframe Value", f"Key {key_index} value:", text=old_val)
+        if not ok:
+            return
+        new_value = _parse_value_text(new_text)
+        if new_value is None:
+            return
+        self._tools_project.change_keyframe_value(
+            comp_id, layer_id, match_path, key_index, new_value)
+        kf_data["value"] = new_value
+        self._update_kf_display(item, kf_data)
+
+    def _edit_kf_time(self, item: QTreeWidgetItem):
+        ctx = self._find_kf_context(item)
+        if ctx is None:
+            return
+        comp_id, layer_id, match_path, key_index = ctx
+        kf_data = item.data(0, ROLE_KEY_DATA)
+        old_time = kf_data.get("time", 0) if kf_data else 0
+        new_text, ok = QInputDialog.getText(
+            self, "Edit Keyframe Time", f"Key {key_index} time (seconds):",
+            text=f"{old_time:.3f}")
+        if not ok:
+            return
+        try:
+            new_time = float(new_text.strip())
+        except ValueError:
+            return
+        self._tools_project.change_keyframe_time(
+            comp_id, layer_id, match_path, key_index, new_time)
+        kf_data["time"] = new_time
+        self._update_kf_display(item, kf_data)
+
+    def _set_kf_interp(self, item: QTreeWidgetItem, transition_type: int):
+        """Set out interpolation — modifies this keyframe's transition_type."""
+        ctx = self._find_kf_context(item)
+        if ctx is None:
+            return
+        comp_id, layer_id, match_path, key_index = ctx
+        self._tools_project.change_keyframe_interpolation(
+            comp_id, layer_id, match_path, key_index, transition_type)
+        kf_data = item.data(0, ROLE_KEY_DATA) or {}
+        type_names = {1: "linear", 2: "bezier", 3: "hold"}
+        kf_data["transitionType"] = type_names.get(transition_type, str(transition_type))
+        self._update_kf_display(item, kf_data)
+
+    def _set_kf_in_interp(self, item: QTreeWidgetItem, transition_type: int):
+        """Set in interpolation — modifies the previous keyframe's transition_type.
+
+        In AEP binary, a keyframe's transition_type controls the outgoing curve.
+        So to change "incoming" interpolation at key N, we modify key N-1.
+        """
+        ctx = self._find_kf_context(item)
+        if ctx is None:
+            return
+        comp_id, layer_id, match_path, key_index = ctx
+        if key_index <= 1:
+            return  # first keyframe has no incoming interpolation
+        prev_index = key_index - 1
+        self._tools_project.change_keyframe_interpolation(
+            comp_id, layer_id, match_path, prev_index, transition_type)
+        # Update the previous keyframe's display
+        parent = item.parent()
+        if parent is not None:
+            prev_item = parent.child(prev_index - 1)  # 0-based child index
+            if prev_item is not None:
+                prev_data = prev_item.data(0, ROLE_KEY_DATA) or {}
+                type_names = {1: "linear", 2: "bezier", 3: "hold"}
+                prev_data["transitionType"] = type_names.get(
+                    transition_type, str(transition_type))
+                self._update_kf_display(prev_item, prev_data)
+
+    def _edit_kf_ease(self, item: QTreeWidgetItem):
+        ctx = self._find_kf_context(item)
+        if ctx is None:
+            return
+        comp_id, layer_id, match_path, key_index = ctx
+        kf_data = item.data(0, ROLE_KEY_DATA) or {}
+
+        in_spd = kf_data.get("inSpeed", [])
+        in_inf = kf_data.get("inInfluence", [])
+        out_spd = kf_data.get("outSpeed", [])
+        out_inf = kf_data.get("outInfluence", [])
+
+        # Format current ease as editable text
+        current = (
+            f"inSpeed={in_spd}, inInfluence={in_inf}, "
+            f"outSpeed={out_spd}, outInfluence={out_inf}"
+        )
+        new_text, ok = QInputDialog.getText(
+            self, "Edit Temporal Ease",
+            "Format: inSpeed, inInfluence, outSpeed, outInfluence\n"
+            "Single value or comma-separated per component:",
+            text=current)
+        if not ok:
+            return
+
+        # Parse: try to extract 4 groups from the text
+        import re
+        nums = re.findall(r'[\d.e+-]+', new_text)
+        if not nums:
+            return
+        floats = [float(x) for x in nums]
+
+        # Distribute evenly into 4 groups
+        n = len(floats) // 4
+        if n < 1:
+            return
+        new_in_spd = floats[:n]
+        new_in_inf = floats[n:n*2]
+        new_out_spd = floats[n*2:n*3]
+        new_out_inf = floats[n*3:n*4]
+
+        self._tools_project.change_keyframe_ease(
+            comp_id, layer_id, match_path, key_index,
+            in_speed=new_in_spd, in_influence=new_in_inf,
+            out_speed=new_out_spd, out_influence=new_out_inf)
+        kf_data["inSpeed"] = new_in_spd
+        kf_data["inInfluence"] = new_in_inf
+        kf_data["outSpeed"] = new_out_spd
+        kf_data["outInfluence"] = new_out_inf
+        self._update_kf_display(item, kf_data)
+
+        # Update ease child item if present
+        for ci in range(item.childCount()):
+            child = item.child(ci)
+            if child and child.text(0) == "Temporal Ease":
+                ease_parts = []
+                if new_in_spd:
+                    pairs = [f"({s:g}, {inf:g}%)"
+                             for s, inf in zip(new_in_spd, new_in_inf)]
+                    ease_parts.append(f"In: {' '.join(pairs)}")
+                if new_out_spd:
+                    pairs = [f"({s:g}, {inf:g}%)"
+                             for s, inf in zip(new_out_spd, new_out_inf)]
+                    ease_parts.append(f"Out: {' '.join(pairs)}")
+                child.setText(2, "  |  ".join(ease_parts))
+                break
+
 
 # -- Project Panel --
 
@@ -417,6 +726,7 @@ class ProjectPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._tools_project = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -438,6 +748,8 @@ class ProjectPanel(QWidget):
         self.tree.header().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.tree.header().setStretchLastSection(False)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.tree, stretch=1)
 
         self.rq_label = QLabel("RENDER QUEUE")
@@ -465,7 +777,8 @@ class ProjectPanel(QWidget):
         self.effects_tree.setMaximumHeight(200)
         layout.addWidget(self.effects_tree)
 
-    def load_project(self, data: dict):
+    def load_project(self, data: dict, tools_project=None):
+        self._tools_project = tools_project
         self.tree.clear()
         self.rq_tree.clear()
         self.effects_tree.clear()
@@ -575,8 +888,15 @@ class ProjectPanel(QWidget):
                 name = item.get("name", "(image)")
                 w, h = item.get("width", 0), item.get("height", 0)
                 suffix = f"  ({w}\u00d7{h})" if w and h else ""
-                node = QTreeWidgetItem([f"\U0001f5bc {name}{suffix}"])
+                full_path = item.get("fullPath", "")
+                label = f"\U0001f5bc {name}{suffix}"
+                if full_path:
+                    label += f"  \u2192 {full_path}"
+                node = QTreeWidgetItem([label])
                 node.setForeground(0, QColor("#808080"))
+                node.setData(0, ROLE_NODE_TYPE, "footage")
+                node.setData(0, ROLE_ASSET_ID, item.get("id"))
+                node.setToolTip(0, full_path or name)
                 parent_item.addChild(node)
             elif item.get("type") == "solid":
                 name = item.get("name", "(solid)")
@@ -585,6 +905,39 @@ class ProjectPanel(QWidget):
                 r, g, b = int(c.get("r", 0)), int(c.get("g", 0)), int(c.get("b", 0))
                 node.setForeground(0, QColor(r, g, b) if (r + g + b) > 100 else QColor("#808080"))
                 parent_item.addChild(node)
+
+    def _on_context_menu(self, pos: QPoint):
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+        node_type = item.data(0, ROLE_NODE_TYPE)
+        if node_type != "footage":
+            return
+        if self._tools_project is None or not self._tools_project.writable:
+            return
+        menu = QMenu(self.tree)
+        menu.addAction("Edit File Path", lambda: self._edit_asset_path(item))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _edit_asset_path(self, item: QTreeWidgetItem):
+        asset_id = item.data(0, ROLE_ASSET_ID)
+        if asset_id is None:
+            return
+        old_path = item.toolTip(0) or ""
+        new_path, ok = QInputDialog.getText(
+            self, "Edit File Path", "File path:", text=old_path)
+        if not ok or not new_path.strip():
+            return
+        new_path = new_path.strip()
+        ok = self._tools_project.change_asset_path(asset_id, new_path)
+        if ok:
+            # Update tree display — rebuild label from current text
+            old_text = item.text(0)
+            # Strip old path suffix if present
+            arrow_idx = old_text.find("  \u2192 ")
+            base = old_text[:arrow_idx] if arrow_idx >= 0 else old_text
+            item.setText(0, f"{base}  \u2192 {new_path}")
+            item.setToolTip(0, new_path)
 
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
         comp_id = item.data(0, Qt.UserRole)

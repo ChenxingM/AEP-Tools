@@ -50,6 +50,10 @@ class MainWindow(QMainWindow):
         splitter.setSizes([300, 1100])
 
         self.status = QStatusBar()
+        self.status.setStyleSheet(
+            "QStatusBar { background-color: #007acc; color: #ffffff; font-size: 12px; }"
+            "QStatusBar QLabel { background: transparent; color: #ffffff; }"
+        )
         self.setStatusBar(self.status)
         self._status_label = QLabel("  Open an AEP/AEPX file to begin")
         self.status.addPermanentWidget(self._status_label, 1)
@@ -165,7 +169,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.clear()
         self._comp_tab_map.clear()
 
-        self.project_panel.load_project(data)
+        self.project_panel.load_project(data, tools_project=self._tools_project)
 
         assets = data.get("assets", {})
         comps = data.get("compositions", [])
