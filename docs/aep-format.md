@@ -1655,6 +1655,50 @@ LIST tdbs
    - Non-spatial multi-dim: values start at offset 8
 4. Patch: `ldat[idx × item_size + value_offset : +packed_size]`
 
+### Modifying Keyframe Time (ldat In-Place Patching)
+
+1. Navigate to the property's `ldat` (same as value patching above)
+2. Read `time_scale` from `tdb4` at offset 11 (uint32)
+3. Compute: `time_raw = round(new_time_seconds × time_scale)`
+4. Patch 4 bytes (signed int32) at offset `idx × item_size + 1` (after 1 skip byte)
+
+### Modifying Keyframe Interpolation (ldat In-Place Patching)
+
+1. Navigate to the property's `ldat`
+2. Patch 1 byte at offset `idx × item_size + 5` (after 1 skip + 4 time bytes)
+3. Values: `1` = linear, `2` = bezier, `3` = hold
+
+**Note:** This byte controls the **outgoing** interpolation. To change a keyframe's incoming interpolation, modify the **previous** keyframe's transition byte.
+
+### Modifying Keyframe Temporal Ease (ldat In-Place Patching)
+
+Ease data layout depends on property type:
+
+**Scalar / Spatial (components=1 or is_spatial):**
+```
+Record: [8B header][16B skip][in_speed f64][in_influence f64][out_speed f64][out_influence f64]
+                              ↑ ease starts at offset 24
+```
+
+**Multi-dimensional (components > 1, non-spatial):**
+```
+Record: [8B header][value: C×8B][in_speed: C×8B][in_influence: C×8B][out_speed: C×8B][out_influence: C×8B]
+                                 ↑ ease starts after value block
+```
+
+Where `C` = number of components (e.g. 2 for 2D position, 3 for scale).
+
+### Modifying Asset File Paths (alas JSON Patching)
+
+Footage asset file paths are stored in JSON within the `alas` chunk:
+
+1. Navigate to `Fold → Item (asset_id) → Pin  → Als2 → alas`
+2. Parse the `alas` data as UTF-8 JSON
+3. Update the `"fullpath"` key
+4. Re-serialize JSON and replace `alas.data`
+
+Item lookup traverses the folder hierarchy recursively, matching by `idta` item ID (offset 16, uint32).
+
 ### Endianness
 
 All multi-byte integers and floats follow the file's byte order:

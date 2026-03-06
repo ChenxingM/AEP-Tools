@@ -1650,6 +1650,50 @@ LIST tdbs
    - 非空间多维属性：值从偏移量 8 开始
 4. 修补：`ldat[idx × item_size + value_offset : +packed_size]`
 
+### 修改关键帧时间（ldat 原位修补）
+
+1. 导航至属性的 `ldat`（同上述值修补）
+2. 从 `tdb4` 偏移量 11 读取 `time_scale`（uint32）
+3. 计算：`time_raw = round(new_time_seconds × time_scale)`
+4. 在偏移量 `idx × item_size + 1`（跳过 1 字节后）修补 4 字节（有符号 int32）
+
+### 修改关键帧插值类型（ldat 原位修补）
+
+1. 导航至属性的 `ldat`
+2. 在偏移量 `idx × item_size + 5`（1 跳过 + 4 时间字节后）修补 1 字节
+3. 值：`1` = 线性, `2` = 贝塞尔, `3` = 定格
+
+**注意：** 此字节控制**出方向**的插值。要修改关键帧的入方向插值，需修改**前一个**关键帧的插值字节。
+
+### 修改关键帧缓动数据（ldat 原位修补）
+
+缓动数据布局取决于属性类型：
+
+**标量 / 空间属性（components=1 或 is_spatial）：**
+```
+记录: [8B 头][16B 跳过][in_speed f64][in_influence f64][out_speed f64][out_influence f64]
+                        ↑ 缓动从偏移量 24 开始
+```
+
+**多维属性（components > 1，非空间）：**
+```
+记录: [8B 头][值: C×8B][in_speed: C×8B][in_influence: C×8B][out_speed: C×8B][out_influence: C×8B]
+                        ↑ 缓动从值块之后开始
+```
+
+其中 `C` = 分量数（如 2D 位置为 2，缩放为 3）。
+
+### 修改素材文件路径（alas JSON 修补）
+
+素材资产的文件路径存储在 `alas` 数据块的 JSON 中：
+
+1. 导航至 `Fold → Item (asset_id) → Pin  → Als2 → alas`
+2. 将 `alas` 数据解析为 UTF-8 JSON
+3. 更新 `"fullpath"` 键
+4. 重新序列化 JSON 并替换 `alas.data`
+
+元素查找通过递归遍历文件夹层级，按 `idta` 中的元素 ID（偏移量 16，uint32）匹配。
+
 ### 字节序
 
 所有多字节整数和浮点数遵循文件的字节序：
