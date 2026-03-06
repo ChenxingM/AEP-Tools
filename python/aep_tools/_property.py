@@ -661,5 +661,16 @@ def _sync_property_to_chunk(prop: Property) -> None:
     else:
         return
 
+    # AE always expects Anchor Point to be 3-component (even on 2D layers).
+    # Position needs 3 components only on 3D layers.
+    if len(prop._match_path) >= 1:
+        last_mn = prop._match_path[-1]
+        if last_mn == "ADBE Anchor Point" and len(floats) == 2:
+            floats.append(0.0)
+        elif last_mn == "ADBE Position" and len(floats) == 2:
+            is_3d = getattr(layer._model, 'threedimensional', False)
+            if is_3d:
+                floats.append(0.0)
+
     set_property_value(project._chunk_tree, comp.id, layer._model.id,
                        prop._match_path, floats, project._big_endian)

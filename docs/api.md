@@ -304,6 +304,15 @@ Wraps a single animatable property (position, opacity, scale, etc.).
 
 > Scale and Opacity are stored as 0-1 fractions (1.0 = 100%).
 
+### Write Notes
+
+When writing property values, `aep_tools` handles several AE binary format requirements automatically:
+
+- **Anchor Point is always 3D** — AE internally stores Anchor Point as `[x, y, z]` even on 2D layers (z fixed at 0). If you write a 2-component value like `[50, 50]`, it is automatically expanded to `[50, 50, 0]`.
+- **Position depends on layer state** — Position is `[x, y]` on 2D layers and `[x, y, z]` on 3D layers. 2-component values are auto-expanded to 3 on 3D layers.
+- **Default properties** — Some Transform properties (Anchor Point, Position, etc.) may not exist in the binary when at default values. Writing to them creates the necessary binary structures automatically.
+- **Dimension upgrades** — If a property exists in the binary with fewer components than the value being written, both the metadata (tdb4) and data (cdat) are rebuilt to match.
+
 ### Example
 
 ```python

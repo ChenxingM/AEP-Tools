@@ -42,8 +42,9 @@ MASK_DIFFERENCE = 6
 
 # Default properties for Transform Group — AE omits these from the binary
 # when they are at their default values.
+# AE always stores Anchor Point as 3-component (x, y, z) even for 2D layers.
 _TRANSFORM_DEFAULTS = [
-    ("ADBE Anchor Point", 2, 2, [0.0, 0.0]),
+    ("ADBE Anchor Point", 2, 3, [0.0, 0.0, 0.0]),
     ("ADBE Position", 2, 2, [0.0, 0.0]),
     ("ADBE Scale", 3, 2, [1.0, 1.0]),
     ("ADBE Rotate Z", 3, 1, 0.0),
@@ -58,6 +59,7 @@ class ProjectParser:
         self.big_endian = big_endian
         self._comp_chunks: dict[int, ChunkList] = {}
         self._layer_prop_key_index: dict[str, int] = {}
+        self._current_layer_3d: bool = False
 
     def _chunk_reader(self, chunk: Chunk) -> BinaryReader:
         if not isinstance(chunk.data, (bytes, bytearray)):
@@ -508,8 +510,10 @@ class ProjectParser:
 
         # Parse property tree
         if tdgp is not None:
+            self._current_layer_3d = layer.threedimensional
             self._parse_property_group(tdgp.list, layer.properties,
                                        str(layer.id))
+            self._current_layer_3d = False
 
         return layer
 
@@ -626,11 +630,16 @@ class ProjectParser:
         existing = {np.match_name for np in group.properties}
         # Don't add ADBE Position if position is split (ADBE Position_0 etc.)
         has_split_pos = any(mn.startswith("ADBE Position_") for mn in existing)
+        is_3d = self._current_layer_3d
         for mn, prop_type, components, default_val in _TRANSFORM_DEFAULTS:
             if mn in existing:
                 continue
             if mn == "ADBE Position" and has_split_pos:
                 continue
+            # 3D layers need 3-component Position
+            if is_3d and mn == "ADBE Position":
+                components = 3
+                default_val = [0.0, 0.0, 0.0]
             full_key = f"{key_prefix}/ADBE Transform Group/{mn}" if key_prefix else f"ADBE Transform Group/{mn}"
             prop = AnimatedProperty(
                 key=full_key, prop_type=prop_type,

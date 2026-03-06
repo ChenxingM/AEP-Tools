@@ -57,12 +57,17 @@ _TDB4_SPATIAL_2 = bytes.fromhex(
     "000000000000000000000000000000"
 )
 
+# Template tdb4 for 3-component spatial properties (Anchor Point — always 3D in AE).
+_TDB4_SPATIAL_3 = bytearray(_TDB4_SPATIAL_2)
+_TDB4_SPATIAL_3[2:4] = b'\x00\x03'  # patch component count to 3
+_TDB4_SPATIAL_3 = bytes(_TDB4_SPATIAL_3)
+
 # Match name → (components, spatial, tdb4_template, tdum, tduM)
 _PROPERTY_TEMPLATES: dict[str, tuple[int, bool, bytes, float, float]] = {
     "ADBE Opacity":      (1, False, _TDB4_SCALAR_1, 0.0, 100.0),
     "ADBE Rotate Z":     (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
     "ADBE Scale":        (3, False, _TDB4_SCALAR_3, 0.0, 0.0),
-    "ADBE Anchor Point": (2, True,  _TDB4_SPATIAL_2, 0.0, 0.0),
+    "ADBE Anchor Point": (3, True,  _TDB4_SPATIAL_3, 0.0, 0.0),
     "ADBE Position":     (2, True,  _TDB4_SPATIAL_2, 0.0, 0.0),
 }
 
@@ -427,12 +432,20 @@ def set_layer_name(root: Chunk, comp_id: int, layer_id: int,
 
 def _create_tdbs_chunk(match_name: str, value: list[float],
                        big_endian: bool) -> Chunk | None:
-    """Create a new tdbs (animated property) chunk from a template."""
+    """Create a new tdbs (animated property) chunk from a template.
+
+    Adapts component count from ``len(value)`` when it exceeds the
+    template default (e.g. 3-component Position on a 3D layer).
+    """
     template = _PROPERTY_TEMPLATES.get(match_name)
     if template is None:
         return None
 
     components, is_spatial, tdb4_data, tdum_val, tduM_val = template
+
+    # Override component count if value has more dimensions than template
+    actual_components = max(components, len(value))
+
     fmt = ">" if big_endian else "<"
 
     # tdsb: flags (visible, not split)
@@ -442,13 +455,15 @@ def _create_tdbs_chunk(match_name: str, value: list[float],
     tdsn_utf8 = Chunk("Utf8", 6, "-_0_/-")
     tdsn = Chunk("tdsn", 14, ChunkList("", [tdsn_utf8]))
 
-    # tdb4: property metadata
-    tdb4 = Chunk("tdb4", len(tdb4_data), tdb4_data)
+    # tdb4: property metadata — patch component count at offset 2 (uint16 BE)
+    tdb4_bytes = bytearray(tdb4_data)
+    struct.pack_into(">H", tdb4_bytes, 2, actual_components)
+    tdb4 = Chunk("tdb4", len(tdb4_bytes), bytes(tdb4_bytes))
 
     # cdat: value + tangent/velocity slots
     # Spatial properties: components*3 + 3 float64s (value, spatial_in, spatial_out, temporal)
     # Non-spatial:        components*5 float64s (value, ease_in, ease_out, influence_in, influence_out)
-    cdat_count = components * 3 + 3 if is_spatial else components * 5
+    cdat_count = actual_components * 3 + 3 if is_spatial else actual_components * 5
     cdat_floats = list(value) + [0.0] * (cdat_count - len(value))
     cdat_data = struct.pack(f"{fmt}{'d' * cdat_count}", *cdat_floats)
     cdat = Chunk("cdat", len(cdat_data), cdat_data)
@@ -551,10 +566,31 @@ def set_property_value(root: Chunk, comp_id: int, layer_id: int,
     if cdat is None:
         return False
 
-    # Patch value floats at the start of cdat, preserving tangent/velocity data
     fmt = ">" if big_endian else "<"
-    fmt += "d" * len(new_value)
-    packed = struct.pack(fmt, *new_value)
+
+    # Check if the value has more components than the tdb4 declares.
+    # This happens when a 3D layer has a 2-component Anchor Point / Position
+    # in the binary — we must upgrade tdb4 and rebuild cdat.
+    tdb4 = prop_cl.find_optional("tdb4")
+    if tdb4 is not None and isinstance(tdb4.data, (bytes, bytearray)) and len(tdb4.data) >= 6:
+        cur_components = struct.unpack_from(">H", tdb4.data, 2)[0]
+        if len(new_value) > cur_components:
+            is_spatial = bool(tdb4.data[5] & (1 << 3))
+            new_components = len(new_value)
+            # Update tdb4 component count
+            tdb4_bytes = bytearray(tdb4.data)
+            struct.pack_into(">H", tdb4_bytes, 2, new_components)
+            tdb4.data = bytes(tdb4_bytes)
+            # Rebuild cdat with correct structure for the new component count
+            cdat_count = new_components * 3 + 3 if is_spatial else new_components * 5
+            cdat_floats = list(new_value) + [0.0] * (cdat_count - len(new_value))
+            cdat_data = struct.pack(f"{fmt}{'d' * cdat_count}", *cdat_floats)
+            cdat.data = cdat_data
+            cdat.length = len(cdat_data)
+            return True
+
+    # Normal path: patch value floats at the start of cdat
+    packed = struct.pack(f"{fmt}{'d' * len(new_value)}", *new_value)
     old_data = bytearray(cdat.data)
     old_data[:len(packed)] = packed
     cdat.data = bytes(old_data)
@@ -1071,11 +1107,116 @@ def set_comp_duration(root: Chunk, comp_id: int, duration: float,
     return True
 
 
+# ── Pre-save fixup ─────────────────────────────────────────────────────
+
+
+# Properties that always need 3 components regardless of 2D/3D state.
+_ALWAYS_3_PROPS = ("ADBE Anchor Point",)
+# Properties that need 3 components only on 3D layers.
+_3D_ONLY_PROPS = ("ADBE Position",)
+
+
+def _fix_spatial_dimensions(root: Chunk, big_endian: bool) -> None:
+    """Scan all layers and upgrade 2-component spatial properties.
+
+    AE always requires Anchor Point to have 3 components (even on 2D layers).
+    Position needs 3 components only on 3D layers.
+    """
+    fold = root.list.find_optional("Fold")
+    if fold is None:
+        return
+    _fix_dims_in_folder(fold.list, big_endian)
+
+
+def _fix_dims_in_folder(cl, big_endian: bool) -> None:
+    for child in cl.children:
+        if child.name == "Item":
+            _fix_dims_in_item(child.list, big_endian)
+            _fix_dims_in_folder(child.list, big_endian)
+        elif child.name == "Sfdr":
+            _fix_dims_in_folder(child.list, big_endian)
+
+
+def _fix_dims_in_item(item_cl, big_endian: bool) -> None:
+    """Check all layers in an item (comp) for dimension mismatches."""
+    for child in item_cl.children:
+        if child.name != "Layr":
+            continue
+        layr_cl = child.list
+        ldta = layr_cl.find_optional("ldta")
+        if ldta is None or not isinstance(ldta.data, (bytes, bytearray)):
+            continue
+        if len(ldta.data) < 40:
+            continue
+        is_3d = bool(ldta.data[_LDTA_FLAGS_OFF + 2] & (1 << 2))
+        tdgp = layr_cl.find_optional("tdgp")
+        if tdgp is None or not _is_chunk_list(tdgp.data):
+            continue
+        transform = _find_named_child(tdgp.data, "ADBE Transform Group")
+        if transform is None or not _is_chunk_list(transform.data):
+            continue
+        # Anchor Point: always 3 components
+        for prop_mn in _ALWAYS_3_PROPS:
+            prop_chunk = _find_named_child(transform.data, prop_mn)
+            if prop_chunk is None or not _is_chunk_list(prop_chunk.data):
+                continue
+            _upgrade_prop_to_3(prop_chunk.data, big_endian)
+        # Position: 3 components only on 3D layers
+        if is_3d:
+            for prop_mn in _3D_ONLY_PROPS:
+                prop_chunk = _find_named_child(transform.data, prop_mn)
+                if prop_chunk is None or not _is_chunk_list(prop_chunk.data):
+                    continue
+                _upgrade_prop_to_3(prop_chunk.data, big_endian)
+
+
+def _upgrade_prop_to_3(prop_cl, big_endian: bool) -> None:
+    """Upgrade a 2-component spatial property to 3 components in-place."""
+    tdb4 = prop_cl.find_optional("tdb4")
+    if tdb4 is None or not isinstance(tdb4.data, (bytes, bytearray)):
+        return
+    if len(tdb4.data) < 6:
+        return
+    cur = struct.unpack_from(">H", tdb4.data, 2)[0]
+    if cur >= 3:
+        return  # already 3+ components
+    is_spatial = bool(tdb4.data[5] & (1 << 3))
+    if not is_spatial:
+        return
+
+    # Update tdb4 component count to 3
+    tdb4_bytes = bytearray(tdb4.data)
+    struct.pack_into(">H", tdb4_bytes, 2, 3)
+    tdb4.data = bytes(tdb4_bytes)
+
+    # Rebuild cdat: [3 values][3 spatial_in][3 spatial_out][3 temporal]
+    cdat = prop_cl.find_optional("cdat")
+    if cdat is None or not isinstance(cdat.data, (bytes, bytearray)):
+        return
+    fmt = ">" if big_endian else "<"
+    old_count = cur * 3 + 3  # old: 2*3+3 = 9
+    new_count = 3 * 3 + 3    # new: 12
+    try:
+        old_floats = list(struct.unpack_from(f"{fmt}{'d' * old_count}", cdat.data))
+    except struct.error:
+        return
+    # Rearrange: [val*2][sin*2][sout*2][temp*3] → [val*3][sin*3][sout*3][temp*3]
+    vals = old_floats[0:cur] + [0.0]
+    sin = old_floats[cur:cur * 2] + [0.0]
+    sout = old_floats[cur * 2:cur * 3] + [0.0]
+    temp = old_floats[cur * 3:cur * 3 + 3]
+    new_floats = vals + sin + sout + temp
+    cdat_data = struct.pack(f"{fmt}{'d' * new_count}", *new_floats)
+    cdat.data = cdat_data
+    cdat.length = len(cdat_data)
+
+
 # High-level Save
 
 
 def save_aep(root: Chunk, big_endian: bool, path: str | Path,
              trailing_data: bytes = b"") -> None:
     """Serialize the chunk tree and write to a file."""
+    _fix_spatial_dimensions(root, big_endian)
     data = serialize_chunk_tree(root, big_endian)
     Path(path).write_bytes(data + trailing_data)
