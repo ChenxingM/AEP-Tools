@@ -25,28 +25,44 @@ from .theme import (
 
 # camelCase string (from to_dict) → display name
 _BLEND_MODE_NAMES: dict[str, str] = {
-    "normal": "Normal", "darken": "Darken", "multiply": "Multiply",
-    "colorBurn": "Color Burn", "linearBurn": "Linear Burn",
-    "darkerColor": "Darker Color", "lighten": "Lighten", "screen": "Screen",
-    "colorDodge": "Color Dodge", "linearDodge": "Linear Dodge",
-    "lighterColor": "Lighter Color", "overlay": "Overlay",
-    "softLight": "Soft Light", "hardLight": "Hard Light",
-    "linearLight": "Linear Light", "vividLight": "Vivid Light",
-    "pinLight": "Pin Light", "hardMix": "Hard Mix",
-    "difference": "Difference", "exclusion": "Exclusion",
+    "normal": "Normal", "dissolve": "Dissolve",
+    "add": "Add", "multiply": "Multiply", "screen": "Screen",
+    "overlay": "Overlay", "softLight": "Soft Light", "hardLight": "Hard Light",
+    "darken": "Darken", "lighten": "Lighten",
+    "classicDifference": "Classic Difference",
     "hue": "Hue", "saturation": "Saturation", "color": "Color",
     "luminosity": "Luminosity",
+    "stencilAlpha": "Stencil Alpha", "stencilLuma": "Stencil Luma",
+    "silhouetteAlpha": "Silhouette Alpha", "silhouetteLuma": "Silhouette Luma",
+    "luminescentPremul": "Luminescent Premul", "alphaAdd": "Alpha Add",
+    "classicColorDodge": "Classic Color Dodge",
+    "classicColorBurn": "Classic Color Burn",
+    "exclusion": "Exclusion", "difference": "Difference",
+    "colorDodge": "Color Dodge", "colorBurn": "Color Burn",
+    "linearDodge": "Linear Dodge", "linearBurn": "Linear Burn",
+    "linearLight": "Linear Light", "vividLight": "Vivid Light",
+    "pinLight": "Pin Light", "hardMix": "Hard Mix",
+    "lighterColor": "Lighter Color", "darkerColor": "Darker Color",
+    "subtract": "Subtract", "divide": "Divide",
 }
 
 # int (from writer API) → display name
 _BLEND_MODE_INT_NAMES: dict[int, str] = {
-    1: "Normal", 3: "Darken", 4: "Multiply", 5: "Color Burn",
-    6: "Linear Burn", 7: "Darker Color", 9: "Lighten", 10: "Screen",
-    11: "Color Dodge", 12: "Linear Dodge", 13: "Lighter Color",
-    15: "Overlay", 16: "Soft Light", 17: "Hard Light",
-    18: "Linear Light", 19: "Vivid Light", 20: "Pin Light",
-    21: "Hard Mix", 23: "Difference", 24: "Exclusion",
-    26: "Hue", 27: "Saturation", 28: "Color", 29: "Luminosity",
+    2: "Normal", 3: "Dissolve",
+    4: "Add", 5: "Multiply", 6: "Screen",
+    7: "Overlay", 8: "Soft Light", 9: "Hard Light",
+    10: "Darken", 11: "Lighten", 12: "Classic Difference",
+    13: "Hue", 14: "Saturation", 15: "Color", 16: "Luminosity",
+    17: "Stencil Alpha", 18: "Stencil Luma",
+    19: "Silhouette Alpha", 20: "Silhouette Luma",
+    21: "Luminescent Premul", 22: "Alpha Add",
+    23: "Classic Color Dodge", 24: "Classic Color Burn",
+    25: "Exclusion", 26: "Difference",
+    27: "Color Dodge", 28: "Color Burn",
+    29: "Linear Dodge", 30: "Linear Burn",
+    31: "Linear Light", 32: "Vivid Light", 33: "Pin Light", 34: "Hard Mix",
+    35: "Lighter Color", 36: "Darker Color",
+    37: "Subtract", 38: "Divide",
 }
 
 
@@ -612,14 +628,23 @@ class CompWidget(QWidget):
             # Blend mode
             blend_menu = menu.addMenu("Blend Mode")
             for bname, bval in [
-                ("Normal", 1), ("Darken", 3), ("Multiply", 4),
-                ("Color Burn", 5), ("Linear Burn", 6), ("Darker Color", 7),
-                ("Lighten", 9), ("Screen", 10), ("Color Dodge", 11),
-                ("Linear Dodge", 12), ("Lighter Color", 13),
-                ("Overlay", 15), ("Soft Light", 16), ("Hard Light", 17),
-                ("Linear Light", 18), ("Vivid Light", 19), ("Pin Light", 20),
-                ("Hard Mix", 21), ("Difference", 23), ("Exclusion", 24),
-                ("Hue", 26), ("Saturation", 27), ("Color", 28), ("Luminosity", 29),
+                ("Normal", 2), ("Dissolve", 3),
+                ("Add", 4), ("Multiply", 5), ("Screen", 6),
+                ("Overlay", 7), ("Soft Light", 8), ("Hard Light", 9),
+                ("Darken", 10), ("Lighten", 11),
+                ("Classic Difference", 12),
+                ("Hue", 13), ("Saturation", 14), ("Color", 15), ("Luminosity", 16),
+                ("Stencil Alpha", 17), ("Stencil Luma", 18),
+                ("Silhouette Alpha", 19), ("Silhouette Luma", 20),
+                ("Luminescent Premul", 21), ("Alpha Add", 22),
+                ("Classic Color Dodge", 23), ("Classic Color Burn", 24),
+                ("Exclusion", 25), ("Difference", 26),
+                ("Color Dodge", 27), ("Color Burn", 28),
+                ("Linear Dodge", 29), ("Linear Burn", 30),
+                ("Linear Light", 31), ("Vivid Light", 32),
+                ("Pin Light", 33), ("Hard Mix", 34),
+                ("Lighter Color", 35), ("Darker Color", 36),
+                ("Subtract", 37), ("Divide", 38),
             ]:
                 blend_menu.addAction(bname, lambda v=bval: self._set_layer_blend_mode(item, v))
             # Track matte

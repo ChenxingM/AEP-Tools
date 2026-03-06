@@ -395,12 +395,21 @@ class Marker:
 LAYER_TYPES = {0: "asset", 1: "light", 2: "camera", 3: "text", 4: "shape"}
 
 BLEND_MODES = {
-    1: "normal", 3: "darken", 4: "multiply", 5: "colorBurn", 6: "linearBurn",
-    7: "darkerColor", 9: "lighten", 10: "screen", 11: "colorDodge",
-    12: "linearDodge", 13: "lighterColor", 15: "overlay", 16: "softLight",
-    17: "hardLight", 18: "linearLight", 19: "vividLight", 20: "pinLight",
-    21: "hardMix", 23: "difference", 24: "exclusion", 26: "hue",
-    27: "saturation", 28: "color", 29: "luminosity",
+    2: "normal", 3: "dissolve",
+    4: "add", 5: "multiply", 6: "screen",
+    7: "overlay", 8: "softLight", 9: "hardLight",
+    10: "darken", 11: "lighten", 12: "classicDifference",
+    13: "hue", 14: "saturation", 15: "color", 16: "luminosity",
+    17: "stencilAlpha", 18: "stencilLuma",
+    19: "silhouetteAlpha", 20: "silhouetteLuma",
+    21: "luminescentPremul", 22: "alphaAdd",
+    23: "classicColorDodge", 24: "classicColorBurn",
+    25: "exclusion", 26: "difference",
+    27: "colorDodge", 28: "colorBurn",
+    29: "linearDodge", 30: "linearBurn",
+    31: "linearLight", 32: "vividLight", 33: "pinLight", 34: "hardMix",
+    35: "lighterColor", 36: "darkerColor",
+    37: "subtract", 38: "divide",
 }
 
 MATTE_MODES = {0: "none", 1: "alpha", 2: "alphaInverted", 3: "luma", 4: "lumaInverted"}
@@ -415,7 +424,7 @@ class Layer:
     asset_id: int = 0
     parent_id: int = 0
     matte_id: int = 0
-    blend_mode: int = 1
+    blend_mode: int = 2
     matte_mode: int = 0
     label_color: int = 0
     in_time: float = 0.0
@@ -452,7 +461,7 @@ class Layer:
             d["assetId"] = self.asset_id
         if self.parent_id:
             d["parentId"] = self.parent_id
-        if self.blend_mode != 1:
+        if self.blend_mode != 2:
             d["blendMode"] = BLEND_MODES.get(self.blend_mode, self.blend_mode)
         if self.matte_mode:
             d["matteMode"] = MATTE_MODES.get(self.matte_mode, self.matte_mode)

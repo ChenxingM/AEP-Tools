@@ -595,7 +595,7 @@ class TestLayer:
     def test_layer_basic_properties(self):
         lm = _make_layer_model(
             name="My Layer", in_time=1.0, out_time=5.0, start_time=0.5,
-            blend_mode=4, visible=True, locked=True, solo=True,
+            blend_mode=5, visible=True, locked=True, solo=True,
         )
         comp_model = _make_comp_model(layers=[lm])
         ci = CompItem(comp_model)
