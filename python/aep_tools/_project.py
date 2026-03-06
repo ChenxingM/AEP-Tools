@@ -19,7 +19,11 @@ from aep_parser.models import (
 )
 
 from ._comp import CompItem
-from ._writer import save_aep, set_comp_name, set_layer_name, set_property_value
+from ._writer import (
+    save_aep, set_asset_path, set_comp_name, set_layer_name,
+    set_property_value, set_keyframe_value, set_keyframe_time,
+    set_keyframe_interpolation, set_keyframe_ease,
+)
 
 
 # Item wrappers
@@ -65,8 +69,10 @@ class FolderItem:
 class FootageItem:
     """Wraps an ImageAsset or SolidAsset."""
 
-    def __init__(self, model: ImageAsset | SolidAsset) -> None:
+    def __init__(self, model: ImageAsset | SolidAsset,
+                 project: Project | None = None) -> None:
         self._model = model
+        self._project = project
 
     @property
     def type_name(self) -> str:
@@ -95,6 +101,20 @@ class FootageItem:
         if isinstance(self._model, ImageAsset):
             return self._model.full_path or None
         return None
+
+    @file.setter
+    def file(self, new_path: str) -> None:
+        """Set the footage file path.
+
+        Updates both the in-memory model and the chunk tree.
+        Mirrors AE scripting ``footageItem.file = new File(path)``.
+        """
+        if not isinstance(self._model, ImageAsset):
+            raise TypeError("Cannot set file path on a SolidAsset")
+        self._model.full_path = new_path
+        if self._project is not None and self._project._chunk_tree is not None:
+            set_asset_path(self._project._chunk_tree, self._model.id,
+                           new_path, self._project._big_endian)
 
     @property
     def color(self) -> list[float] | None:
@@ -357,6 +377,65 @@ class Project:
         return set_property_value(self._chunk_tree, comp_id, layer_id,
                                   match_name_path, new_value, self._big_endian)
 
+    def change_keyframe_value(self, comp_id: int, layer_id: int,
+                              match_name_path: list[str], key_index: int,
+                              new_value: list[float] | float) -> bool:
+        """Change a keyframe's value in the chunk tree."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_keyframe_value(self._chunk_tree, comp_id, layer_id,
+                                  match_name_path, key_index, new_value,
+                                  self._big_endian)
+
+    def change_keyframe_time(self, comp_id: int, layer_id: int,
+                             match_name_path: list[str], key_index: int,
+                             new_time: float) -> bool:
+        """Change a keyframe's time in the chunk tree."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_keyframe_time(self._chunk_tree, comp_id, layer_id,
+                                 match_name_path, key_index, new_time,
+                                 self._big_endian)
+
+    def change_keyframe_interpolation(self, comp_id: int, layer_id: int,
+                                      match_name_path: list[str], key_index: int,
+                                      transition_type: int) -> bool:
+        """Change a keyframe's interpolation type (1=linear, 2=bezier, 3=hold)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_keyframe_interpolation(self._chunk_tree, comp_id, layer_id,
+                                          match_name_path, key_index,
+                                          transition_type, self._big_endian)
+
+    def change_keyframe_ease(self, comp_id: int, layer_id: int,
+                             match_name_path: list[str], key_index: int,
+                             in_speed: list[float] | None = None,
+                             in_influence: list[float] | None = None,
+                             out_speed: list[float] | None = None,
+                             out_influence: list[float] | None = None) -> bool:
+        """Change a keyframe's temporal ease (speed/influence)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_keyframe_ease(self._chunk_tree, comp_id, layer_id,
+                                 match_name_path, key_index,
+                                 in_speed, in_influence,
+                                 out_speed, out_influence,
+                                 self._big_endian)
+
+    def change_asset_path(self, asset_id: int, new_path: str) -> bool:
+        """Change a footage asset's file path in the chunk tree.
+
+        Args:
+            asset_id: Asset ID (from ``footage_item.id``).
+            new_path: New file path string.
+
+        Returns True if successful.
+        """
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_asset_path(self._chunk_tree, asset_id, new_path,
+                              self._big_endian)
+
     def __repr__(self) -> str:
         return f"Project(file={self._file!r}, num_comps={len(self._model.compositions)})"
 
@@ -381,7 +460,7 @@ def _wrap_item(item: Any, project: Project) -> Any:
     if isinstance(item, Composition):
         return CompItem(item, project)
     if isinstance(item, (ImageAsset, SolidAsset)):
-        return FootageItem(item)
+        return FootageItem(item, project)
     return item
 
 

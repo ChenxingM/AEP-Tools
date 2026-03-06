@@ -265,6 +265,113 @@ class Property:
 
         return _convert_value(kfs[-1].value)
 
+    # Write methods (AE scripting style)
+
+    def _sync_keyframe_to_chunk(self, method_name: str, key_index: int,
+                                **kwargs) -> bool:
+        """Call a writer method on the chunk tree if write context exists."""
+        layer = self._layer_ref
+        if layer is None or not self._match_path:
+            return False
+        comp = getattr(layer, '_containing_comp', None)
+        if comp is None:
+            return False
+        project = getattr(comp, '_project', None)
+        if project is None or project._chunk_tree is None:
+            return False
+        method = getattr(project, method_name, None)
+        if method is None:
+            return False
+        return method(comp.id, layer._model.id, self._match_path,
+                      key_index, **kwargs)
+
+    def set_value_at_key(self, key_index: int, new_value: Any) -> None:
+        """Set the value of a keyframe (1-based index).
+
+        Mirrors AE scripting ``property.setValueAtKey(keyIndex, value)``.
+        """
+        kf = self._kf(key_index)
+        kf.value = _to_model_value(new_value)
+        if isinstance(new_value, (int, float)):
+            floats = [float(new_value)]
+        elif isinstance(new_value, list):
+            floats = [float(v) for v in new_value]
+        else:
+            floats = new_value
+        self._sync_keyframe_to_chunk(
+            "change_keyframe_value", key_index, new_value=floats)
+
+    def set_interpolation_type_at_key(self, key_index: int,
+                                      in_type: KeyframeInterpolationType,
+                                      out_type: KeyframeInterpolationType | None = None,
+                                      ) -> None:
+        """Set interpolation type at a keyframe.
+
+        Mirrors AE scripting
+        ``property.setInterpolationTypeAtKey(keyIndex, inType, outType)``.
+
+        In AEP binary, each keyframe stores one transition_type that controls
+        the **outgoing** curve. So:
+        - *out_type* → sets this keyframe's transition_type
+        - *in_type* → sets the previous keyframe's transition_type (key_index - 1)
+
+        If *out_type* is None, it defaults to *in_type* (same as AE behavior
+        when only one type is specified).
+        """
+        if out_type is None:
+            out_type = in_type
+
+        # Set out interpolation on this keyframe
+        kf = self._kf(key_index)
+        kf.transition_type = int(out_type)
+        self._sync_keyframe_to_chunk(
+            "change_keyframe_interpolation", key_index,
+            transition_type=int(out_type))
+
+        # Set in interpolation on the previous keyframe
+        if key_index > 1:
+            prev_kf = self._kf(key_index - 1)
+            prev_kf.transition_type = int(in_type)
+            self._sync_keyframe_to_chunk(
+                "change_keyframe_interpolation", key_index - 1,
+                transition_type=int(in_type))
+
+    def set_temporal_ease_at_key(self, key_index: int,
+                                 in_ease: list[dict] | None = None,
+                                 out_ease: list[dict] | None = None) -> None:
+        """Set temporal ease at a keyframe.
+
+        Mirrors AE scripting
+        ``property.setTemporalEaseAtKey(keyIndex, inEase, outEase)``.
+
+        Each ease entry is ``{"speed": float, "influence": float}``.
+        """
+        kf = self._kf(key_index)
+        in_speed = in_influence = out_speed = out_influence = None
+        if in_ease is not None:
+            in_speed = [e.get("speed", 0.0) for e in in_ease]
+            in_influence = [e.get("influence", 0.0) for e in in_ease]
+            kf.in_speed = in_speed[:]
+            kf.in_influence = in_influence[:]
+        if out_ease is not None:
+            out_speed = [e.get("speed", 0.0) for e in out_ease]
+            out_influence = [e.get("influence", 0.0) for e in out_ease]
+            kf.out_speed = out_speed[:]
+            kf.out_influence = out_influence[:]
+        self._sync_keyframe_to_chunk(
+            "change_keyframe_ease", key_index,
+            in_speed=in_speed, in_influence=in_influence,
+            out_speed=out_speed, out_influence=out_influence)
+
+    def set_value_at_time(self, time: float, new_value: Any) -> None:
+        """Set a keyframe's value by its time.
+
+        Finds the nearest keyframe to *time* and updates its value.
+        Mirrors AE scripting ``property.setValueAtTime(time, value)``.
+        """
+        idx = self.nearest_key_index(time)
+        self.set_value_at_key(idx, new_value)
+
     def __repr__(self) -> str:
         return f"Property({self._display_name!r}, num_keys={self.num_keys})"
 
