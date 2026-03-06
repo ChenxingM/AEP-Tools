@@ -440,6 +440,91 @@ class Project:
         return set_asset_path(self._chunk_tree, asset_id, new_path,
                               self._big_endian)
 
+    def change_comp_name(self, comp_id: int, new_name: str) -> bool:
+        """Change a composition's name."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_name(self._chunk_tree, comp_id, new_name,
+                             self._big_endian)
+
+    def change_layer_flag(self, comp_id: int, layer_id: int,
+                          flag_name: str, value: bool) -> bool:
+        """Toggle a layer flag (visible, solo, shy, locked, threedimensional, etc.)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_flag(self._chunk_tree, comp_id, layer_id,
+                              flag_name, value, self._big_endian)
+
+    def change_layer_label(self, comp_id: int, layer_id: int,
+                           label: int) -> bool:
+        """Change a layer's label color index."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_label(self._chunk_tree, comp_id, layer_id,
+                               label, self._big_endian)
+
+    def change_layer_blend_mode(self, comp_id: int, layer_id: int,
+                                mode: int) -> bool:
+        """Change a layer's blend mode."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_blend_mode(self._chunk_tree, comp_id, layer_id,
+                                    mode, self._big_endian)
+
+    def change_layer_track_matte(self, comp_id: int, layer_id: int,
+                                 matte_type: int) -> bool:
+        """Change a layer's track matte type."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_track_matte(self._chunk_tree, comp_id, layer_id,
+                                     matte_type, self._big_endian)
+
+    def change_layer_quality(self, comp_id: int, layer_id: int,
+                             quality: int) -> bool:
+        """Change a layer's quality (0=wireframe, 1=draft, 2=best)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_quality(self._chunk_tree, comp_id, layer_id,
+                                 quality, self._big_endian)
+
+    def change_layer_time_field(self, comp_id: int, layer_id: int,
+                                field: str, value: float) -> bool:
+        """Change a layer time field (in_time, out_time, start_time, time_stretch)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_time_field(self._chunk_tree, comp_id, layer_id,
+                                    field, value, self._big_endian)
+
+    def change_comp_dimensions(self, comp_id: int, width: int,
+                               height: int) -> bool:
+        """Change a composition's width and height."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_dimensions(self._chunk_tree, comp_id, width, height,
+                                   self._big_endian)
+
+    def change_comp_bgcolor(self, comp_id: int,
+                            r: int, g: int, b: int) -> bool:
+        """Change a composition's background color (0-255 each)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_bgcolor(self._chunk_tree, comp_id, r, g, b,
+                                self._big_endian)
+
+    def change_comp_framerate(self, comp_id: int, framerate: float) -> bool:
+        """Change a composition's frame rate."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_framerate(self._chunk_tree, comp_id, framerate,
+                                  self._big_endian)
+
+    def change_comp_duration(self, comp_id: int, duration: float) -> bool:
+        """Change a composition's duration in seconds."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_duration(self._chunk_tree, comp_id, duration,
+                                 self._big_endian)
+
     def __repr__(self) -> str:
         return f"Project(file={self._file!r}, num_comps={len(self._model.compositions)})"
 

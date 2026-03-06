@@ -444,6 +444,54 @@ class CompWidget(QWidget):
         # Layer rename
         if node_type == "layer" and self._writable:
             menu.addAction("Rename Layer", lambda: self._rename_layer(item))
+            # Layer flags
+            flags_menu = menu.addMenu("Flags")
+            for flag_label, flag_key in [
+                ("Visible", "visible"), ("Solo", "solo"), ("Shy", "shy"),
+                ("Locked", "locked"), ("3D Layer", "threedimensional"),
+                ("Guide Layer", "is_guide"), ("Adjustment Layer", "is_adjustment"),
+                ("Null Layer", "is_null"), ("Collapse Transformation", "continuously_rasterize"),
+                ("Motion Blur", "motion_blur_enabled"), ("Effects Enabled", "effects_enabled"),
+                ("Auto-Orient", "auto_orient"), ("Bicubic Sampling", "bicubic_sampling"),
+            ]:
+                act = flags_menu.addAction(flag_label)
+                act.setCheckable(True)
+                act.setChecked(self._get_layer_flag(item, flag_key))
+                act.triggered.connect(
+                    lambda checked, k=flag_key: self._toggle_layer_flag(item, k, checked))
+            # Label
+            label_menu = menu.addMenu("Label")
+            for idx, lbl in enumerate(
+                ["None", "Red", "Yellow", "Aqua", "Pink", "Lavender",
+                 "Peach", "Sea Foam", "Blue", "Green", "Purple",
+                 "Orange", "Brown", "Fuchsia", "Cyan", "Tan", "Dark Green"]):
+                label_menu.addAction(lbl, lambda i=idx: self._set_layer_label(item, i))
+            # Blend mode
+            blend_menu = menu.addMenu("Blend Mode")
+            for bname, bval in [
+                ("Normal", 1), ("Darken", 3), ("Multiply", 4),
+                ("Color Burn", 5), ("Linear Burn", 6), ("Darker Color", 7),
+                ("Lighten", 9), ("Screen", 10), ("Color Dodge", 11),
+                ("Linear Dodge", 12), ("Lighter Color", 13),
+                ("Overlay", 15), ("Soft Light", 16), ("Hard Light", 17),
+                ("Linear Light", 18), ("Vivid Light", 19), ("Pin Light", 20),
+                ("Hard Mix", 21), ("Difference", 23), ("Exclusion", 24),
+                ("Hue", 26), ("Saturation", 27), ("Color", 28), ("Luminosity", 29),
+            ]:
+                blend_menu.addAction(bname, lambda v=bval: self._set_layer_blend_mode(item, v))
+            # Track matte
+            matte_menu = menu.addMenu("Track Matte")
+            for mname, mval in [
+                ("None", 0), ("Alpha", 1), ("Alpha Inverted", 2),
+                ("Luma", 3), ("Luma Inverted", 4),
+            ]:
+                matte_menu.addAction(mname, lambda v=mval: self._set_layer_track_matte(item, v))
+            # Quality
+            quality_menu = menu.addMenu("Quality")
+            for qname, qval in [("Wireframe", 0), ("Draft", 1), ("Best", 2)]:
+                quality_menu.addAction(qname, lambda v=qval: self._set_layer_quality(item, v))
+            # Timing
+            menu.addAction("Edit Timing...", lambda: self._edit_layer_timing(item))
 
         # Property value edit
         match_path = item.data(0, ROLE_MATCH_PATH)
@@ -487,6 +535,76 @@ class CompWidget(QWidget):
         self.tree.blockSignals(False)
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_name(comp_id, layer_id, new_name)
+
+    def _get_layer_flag(self, item: QTreeWidgetItem, flag_key: str) -> bool:
+        """Read a flag from the layer data in the comp dict."""
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        for layer in self.comp.get("layers", []):
+            if layer.get("id") == layer_id:
+                flags = layer.get("flags", {})
+                return bool(flags.get(flag_key, False))
+        return False
+
+    def _toggle_layer_flag(self, item: QTreeWidgetItem, flag_key: str, value: bool):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_flag(comp_id, layer_id, flag_key, value)
+
+    def _set_layer_label(self, item: QTreeWidgetItem, label: int):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_label(comp_id, layer_id, label)
+
+    def _set_layer_blend_mode(self, item: QTreeWidgetItem, mode: int):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_blend_mode(comp_id, layer_id, mode)
+
+    def _set_layer_track_matte(self, item: QTreeWidgetItem, matte_type: int):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_track_matte(comp_id, layer_id, matte_type)
+
+    def _set_layer_quality(self, item: QTreeWidgetItem, quality: int):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_quality(comp_id, layer_id, quality)
+
+    def _edit_layer_timing(self, item: QTreeWidgetItem):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is None or comp_id is None:
+            return
+        # Find current values from layer data
+        layer_data = None
+        for layer in self.comp.get("layers", []):
+            if layer.get("id") == layer_id:
+                layer_data = layer
+                break
+        in_t = layer_data.get("inTime", 0) if layer_data else 0
+        out_t = layer_data.get("outTime", 0) if layer_data else 0
+        start_t = layer_data.get("startTime", 0) if layer_data else 0
+        stretch = layer_data.get("stretch", 1.0) if layer_data else 1.0
+        current = f"in={in_t}, out={out_t}, start={start_t}, stretch={stretch}"
+        new_text, ok = QInputDialog.getText(
+            self, "Edit Layer Timing",
+            "Format: in=<sec>, out=<sec>, start=<sec>, stretch=<ratio>",
+            text=current)
+        if not ok:
+            return
+        import re
+        for m in re.finditer(r'(in|out|start|stretch)\s*=\s*([\d.e+-]+)', new_text):
+            field_map = {"in": "in_time", "out": "out_time",
+                         "start": "start_time", "stretch": "time_stretch"}
+            field = field_map.get(m.group(1))
+            if field:
+                self._tools_project.change_layer_time_field(
+                    comp_id, layer_id, field, float(m.group(2)))
 
     def _edit_property(self, item: QTreeWidgetItem):
         match_path = item.data(0, ROLE_MATCH_PATH)
@@ -910,14 +1028,25 @@ class ProjectPanel(QWidget):
         item = self.tree.itemAt(pos)
         if item is None:
             return
-        node_type = item.data(0, ROLE_NODE_TYPE)
-        if node_type != "footage":
-            return
         if self._tools_project is None or not self._tools_project.writable:
             return
+        node_type = item.data(0, ROLE_NODE_TYPE)
         menu = QMenu(self.tree)
-        menu.addAction("Edit File Path", lambda: self._edit_asset_path(item))
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+        if node_type == "footage":
+            menu.addAction("Edit File Path", lambda: self._edit_asset_path(item))
+
+        # Comp items have a comp_id in UserRole
+        comp_id = item.data(0, Qt.UserRole)
+        if comp_id is not None:
+            menu.addAction("Rename Composition", lambda: self._rename_comp(item, comp_id))
+            menu.addAction("Edit Dimensions...", lambda: self._edit_comp_dimensions(comp_id))
+            menu.addAction("Edit Frame Rate...", lambda: self._edit_comp_framerate(comp_id))
+            menu.addAction("Edit Duration...", lambda: self._edit_comp_duration(comp_id))
+            menu.addAction("Edit Background Color...", lambda: self._edit_comp_bgcolor(comp_id))
+
+        if not menu.isEmpty():
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _edit_asset_path(self, item: QTreeWidgetItem):
         asset_id = item.data(0, ROLE_ASSET_ID)
@@ -938,6 +1067,77 @@ class ProjectPanel(QWidget):
             base = old_text[:arrow_idx] if arrow_idx >= 0 else old_text
             item.setText(0, f"{base}  \u2192 {new_path}")
             item.setToolTip(0, new_path)
+
+    def _rename_comp(self, item: QTreeWidgetItem, comp_id: int):
+        old_text = item.text(0)
+        # Strip icon prefix for editing
+        import re
+        name_match = re.search(r'[^\s].*?(?=\s+\()', old_text)
+        old_name = name_match.group(0) if name_match else old_text
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Composition", "Name:", text=old_name)
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        self._tools_project.change_comp_name(comp_id, new_name)
+        # Update display — preserve icon and size suffix
+        prefix = old_text[:old_text.index(old_name)] if old_name in old_text else ""
+        suffix_match = re.search(r'\s+\(\d+.+\)$', old_text)
+        suffix = suffix_match.group(0) if suffix_match else ""
+        item.setText(0, f"{prefix}{new_name}{suffix}")
+
+    def _edit_comp_dimensions(self, comp_id: int):
+        text, ok = QInputDialog.getText(
+            self, "Edit Dimensions", "Width x Height (e.g. 1920x1080):")
+        if not ok or not text.strip():
+            return
+        import re
+        m = re.match(r'(\d+)\s*[x×,]\s*(\d+)', text.strip())
+        if not m:
+            return
+        self._tools_project.change_comp_dimensions(
+            comp_id, int(m.group(1)), int(m.group(2)))
+
+    def _edit_comp_framerate(self, comp_id: int):
+        text, ok = QInputDialog.getText(
+            self, "Edit Frame Rate", "Frame rate (fps):")
+        if not ok or not text.strip():
+            return
+        try:
+            fps = float(text.strip())
+        except ValueError:
+            return
+        self._tools_project.change_comp_framerate(comp_id, fps)
+
+    def _edit_comp_duration(self, comp_id: int):
+        text, ok = QInputDialog.getText(
+            self, "Edit Duration", "Duration (seconds):")
+        if not ok or not text.strip():
+            return
+        try:
+            dur = float(text.strip())
+        except ValueError:
+            return
+        self._tools_project.change_comp_duration(comp_id, dur)
+
+    def _edit_comp_bgcolor(self, comp_id: int):
+        text, ok = QInputDialog.getText(
+            self, "Edit Background Color",
+            "RGB (0-255), e.g. 0,0,0 or #000000:")
+        if not ok or not text.strip():
+            return
+        text = text.strip()
+        import re
+        if text.startswith("#") and len(text) >= 7:
+            r = int(text[1:3], 16)
+            g = int(text[3:5], 16)
+            b = int(text[5:7], 16)
+        else:
+            nums = re.findall(r'\d+', text)
+            if len(nums) < 3:
+                return
+            r, g, b = int(nums[0]), int(nums[1]), int(nums[2])
+        self._tools_project.change_comp_bgcolor(comp_id, r, g, b)
 
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
         comp_id = item.data(0, Qt.UserRole)
