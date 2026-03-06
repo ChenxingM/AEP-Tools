@@ -23,7 +23,23 @@ from .theme import (
 
 # -- Constants for display --
 
-_BLEND_MODE_NAMES: dict[int, str] = {
+# camelCase string (from to_dict) → display name
+_BLEND_MODE_NAMES: dict[str, str] = {
+    "normal": "Normal", "darken": "Darken", "multiply": "Multiply",
+    "colorBurn": "Color Burn", "linearBurn": "Linear Burn",
+    "darkerColor": "Darker Color", "lighten": "Lighten", "screen": "Screen",
+    "colorDodge": "Color Dodge", "linearDodge": "Linear Dodge",
+    "lighterColor": "Lighter Color", "overlay": "Overlay",
+    "softLight": "Soft Light", "hardLight": "Hard Light",
+    "linearLight": "Linear Light", "vividLight": "Vivid Light",
+    "pinLight": "Pin Light", "hardMix": "Hard Mix",
+    "difference": "Difference", "exclusion": "Exclusion",
+    "hue": "Hue", "saturation": "Saturation", "color": "Color",
+    "luminosity": "Luminosity",
+}
+
+# int (from writer API) → display name
+_BLEND_MODE_INT_NAMES: dict[int, str] = {
     1: "Normal", 3: "Darken", 4: "Multiply", 5: "Color Burn",
     6: "Linear Burn", 7: "Darker Color", 9: "Lighten", 10: "Screen",
     11: "Color Dodge", 12: "Linear Dodge", 13: "Lighter Color",
@@ -200,8 +216,8 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
 
         # Column 2: type + blend mode + flags + timing
         flags = layer.get("flags", {})
-        blend_mode = layer.get("blendMode", 1)
-        blend_name = _BLEND_MODE_NAMES.get(blend_mode, "")
+        blend_mode = layer.get("blendMode", "")
+        blend_name = _BLEND_MODE_NAMES.get(blend_mode, "") if blend_mode else ""
         ftags = _flag_tags(flags)
 
         info_parts = [f"[{label}]"]
@@ -684,8 +700,8 @@ class CompWidget(QWidget):
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_blend_mode(comp_id, layer_id, mode)
-            # Update display
-            name = _BLEND_MODE_NAMES.get(mode, "")
+            # Update display — map int back to display name
+            name = _BLEND_MODE_INT_NAMES.get(mode, "")
             self._update_layer_info(item, blend_name=name)
 
     def _set_layer_track_matte(self, item: QTreeWidgetItem, matte_type: int):
@@ -714,7 +730,8 @@ class CompWidget(QWidget):
         label, _ = LAYER_TYPE_LABELS.get(ltype, ("?", "#cccccc"))
         flags = layer_data.get("flags", {})
         if blend_name is None:
-            blend_name = _BLEND_MODE_NAMES.get(layer_data.get("blendMode", 1), "")
+            bm = layer_data.get("blendMode", "")
+            blend_name = _BLEND_MODE_NAMES.get(bm, "") if bm else ""
         ftags = _flag_tags(flags)
         info_parts = [f"[{label}]"]
         if blend_name and blend_name != "Normal":
