@@ -1,133 +1,99 @@
 # aep_tools API Reference
 
-AE scripting-style API for After Effects project files (`.aep` / `.aepx`).
+AE scripting-style API for After Effects project files. Mirrors [After Effects Scripting Guide](https://ae-scripting.docsforadobe.dev/).
 
-API design mirrors [After Effects ExtendScript](https://ae-scripting.docsforadobe.dev/), using 1-based indexing and chain-style property access.
-
-> **Read/Write Legend:** Properties marked **RW** are read-write (modify + save back to `.aep`). All others are **read-only**. Write support requires the project to be opened from a binary `.aep` file (`proj.writable == True`).
-
----
-
-## Quick Start
-
-```python
-from aep_tools import Project
-
-proj = Project.open("my_project.aep")
-comp = proj.comp("Main Comp")
-layer = comp.layer(1)
-
-# Read properties
-print(layer.position.value)        # [960, 540]
-print(layer.opacity.num_keys)      # 3
-
-# AE-style chaining
-layer("Transform")("Position").key_value(1)
-
-# Modify and save
-layer.position.value = [500.0, 300.0]
-layer.position.set_value_at_key(1, [0.0, 0.0])
-proj.save("output.aep")
-```
-
----
-
-## Opening Projects
-
-### `Project.open(path)`
-
-Auto-detect `.aep` / `.aepx` by extension.
-
-```python
-proj = Project.open("path/to/project.aep")
-proj = Project.open("path/to/project.aepx")
-```
-
-### `open_aep(path)` / `open_aepx(path)`
-
-Open a specific format directly.
-
-```python
-from aep_tools import open_aep, open_aepx
-proj = open_aep("binary.aep")
-proj = open_aepx("xml.aepx")
-```
-
-### `load_project(model)`
-
-Wrap an already-parsed `aep_parser.models.Project` model.
-
-```python
-from aep_parser import parse_aep
-from aep_tools import load_project
-model = parse_aep(data)
-proj = load_project(model)
-```
+All collection indices are **1-based**.
 
 ---
 
 ## Project
 
-| Property / Method | Type | R/W | Description |
-|---|---|---|---|
-| `file` | `str \| None` | R | File path (if opened from file) |
-| `ae_version` | `str \| None` | R | AE version that last saved this file (e.g. `"25.6"`) |
-| `writable` | `bool` | R | `True` if loaded from binary `.aep` (supports save/modify) |
-| `compositions` | `list[CompItem]` | R | All compositions |
-| `comp(name_or_index)` | `CompItem \| None` | R | Lookup by name or 1-based index |
-| `num_items` | `int` | R | Number of top-level project items |
-| `items` | `ItemCollection` | R | All top-level items (1-based) |
-| `item(index)` | `Any \| None` | R | Get item by 1-based index |
-| `active_item` | `CompItem \| None` | R | Active composition (if available) |
-| `render_queue` | `RenderQueue` | R | Render queue |
-| `save(path)` | `None` | — | Save to `.aep` file (requires `writable`) |
+Represents an After Effects project. Returned by `Project.open()`.
 
-### Low-Level Write Methods
+### Class Method
 
-These operate directly on the chunk tree. For most use cases, prefer the property-level setters (e.g. `layer.position.value = ...`).
-
-| Method | Return | Description |
+| Method | Returns | Description |
 |---|---|---|
-| `change_layer_name(comp_id, layer_id, new_name)` | `bool` | Rename a layer |
-| `change_property_value(comp_id, layer_id, match_path, value)` | `bool` | Change a property's static value |
-| `change_keyframe_value(comp_id, layer_id, match_path, key_index, value)` | `bool` | Change a keyframe's value |
-| `change_keyframe_time(comp_id, layer_id, match_path, key_index, time)` | `bool` | Change a keyframe's time |
-| `change_keyframe_interpolation(comp_id, layer_id, match_path, key_index, type)` | `bool` | Change interpolation (1=linear, 2=bezier, 3=hold) |
-| `change_keyframe_ease(comp_id, layer_id, match_path, key_index, ...)` | `bool` | Change temporal ease (speed/influence) |
-| `change_asset_path(asset_id, new_path)` | `bool` | Change a footage asset's file path |
+| `Project.open(path)` | `Project` | Open a `.aep` or `.aepx` file |
+
+### Properties
+
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `file` | `str \| None` | R | Source file path |
+| `ae_version` | `str \| None` | R | AE version that saved this project (e.g. `"25.6"`) |
+| `writable` | `bool` | R | Whether save/modify is supported (`.aep` only) |
+| `num_items` | `int` | R | Number of top-level items |
+| `items` | `ItemCollection` | R | Top-level items (1-based) |
+| `compositions` | `list[CompItem]` | R | All compositions |
+| `active_item` | `CompItem \| None` | R | Active composition |
+| `render_queue` | `RenderQueue` | R | Render queue |
+
+### Methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `item(index)` | `Any \| None` | Get item by 1-based index |
+| `comp(name_or_index)` | `CompItem \| None` | Get composition by name or 1-based index |
+| `save(path=None)` | `None` | Save to `.aep`. If path is None, overwrite original |
+| `change_layer_name(comp_id, layer_id, name)` | `bool` | Rename a layer |
+| `change_property_value(comp_id, layer_id, match_path, value)` | `bool` | Set property static value |
+| `change_keyframe_value(comp_id, layer_id, match_path, key_index, value)` | `bool` | Set keyframe value |
+| `change_keyframe_time(comp_id, layer_id, match_path, key_index, time)` | `bool` | Set keyframe time (seconds) |
+| `change_keyframe_interpolation(comp_id, layer_id, match_path, key_index, type)` | `bool` | Set interpolation (1=linear, 2=bezier, 3=hold) |
+| `change_keyframe_ease(comp_id, layer_id, match_path, key_index, ...)` | `bool` | Set temporal ease |
+| `change_asset_path(asset_id, new_path)` | `bool` | Set footage file path |
+
+### Example
 
 ```python
-proj.comp("Main Comp")    # by name
-proj.comp(1)              # by 1-based index
-proj.ae_version           # "25.6"
+from aep_tools import Project
+
+proj = Project.open("input.aep")
+print(proj.ae_version)            # "25.6"
+comp = proj.comp("Main Comp")     # by name
+comp = proj.comp(1)               # by index
+proj.save("output.aep")
 ```
 
 ---
 
 ## CompItem
 
-| Property / Method | Type | R/W | Description |
+Represents a composition.
+
+### Properties
+
+| Property | Type | Access | Description |
 |---|---|---|---|
-| `name` | `str` | **RW** | Composition name |
+| `name` | `str` | R/W | Composition name |
 | `id` | `int` | R | Internal ID |
+| `type_name` | `str` | R | Always `"Composition"` |
 | `width` | `int` | R | Width in pixels |
 | `height` | `int` | R | Height in pixels |
-| `duration` | `float` | R | Duration in seconds |
+| `duration` | `float` | R | Duration (seconds) |
 | `frame_rate` | `float` | R | Frames per second |
-| `frame_duration` | `float` | R | `1.0 / frame_rate` |
+| `frame_duration` | `float` | R | Duration of one frame (`1/frame_rate`) |
 | `work_area_start` | `float` | R | Work area start (seconds) |
 | `work_area_duration` | `float` | R | Work area duration (seconds) |
 | `bg_color` | `list[float]` | R | Background color `[r, g, b]` |
 | `num_layers` | `int` | R | Number of layers |
 | `layers` | `LayerCollection` | R | All layers (1-based) |
-| `layer(name_or_index)` | `Layer \| None` | R | Lookup by name or 1-based index |
 | `marker_property` | `MarkerProperty \| None` | R | Composition markers |
+
+### Methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `layer(name_or_index)` | `Layer \| None` | Get layer by name or 1-based index |
+
+### Example
 
 ```python
 comp = proj.comp("Main Comp")
-comp.name = "Renamed Comp"    # write-back to .aep
-comp.layer(1)                  # first layer
-comp.layer("Background")      # by name
+comp.name = "Renamed"
+print(f"{comp.width}x{comp.height} @ {comp.frame_rate}fps")
+
 for layer in comp.layers:
     print(layer.name)
 ```
@@ -136,303 +102,261 @@ for layer in comp.layers:
 
 ## Layer
 
-Base class. Actual layers are subclassed as `AVLayer`, `TextLayer`, `ShapeLayer`, `CameraLayer`, `LightLayer` (selected automatically by the factory).
+Base class for all layers. Subtypes: `AVLayer`, `TextLayer`, `ShapeLayer`, `CameraLayer`, `LightLayer` (auto-selected).
 
-### Identity
+### Properties
 
-| Property | Type | R/W | Description |
+| Property | Type | Access | Description |
 |---|---|---|---|
 | `index` | `int` | R | 1-based index in composition |
-| `name` | `str` | **RW** | Layer name |
+| `name` | `str` | R/W | Layer name |
 | `containing_comp` | `CompItem \| None` | R | Parent composition |
 | `label` | `int` | R | Label color index |
+| `enabled` | `bool` | R | Visibility (eye icon) |
+| `solo` | `bool` | R | Solo |
+| `shy` | `bool` | R | Shy |
+| `locked` | `bool` | R | Locked |
+| `null_layer` | `bool` | R | Is null object |
+| `guide_layer` | `bool` | R | Is guide layer |
+| `adjustment_layer` | `bool` | R | Is adjustment layer |
+| `three_d_layer` | `bool` | R | 3D layer |
+| `auto_orient` | `bool` | R | Auto-orient |
+| `effects_active` | `bool` | R | Effects enabled |
+| `motion_blur` | `bool` | R | Motion blur |
+| `collapse_transformation` | `bool` | R | Collapse / Continuously rasterize |
+| `sampling_quality` | `bool` | R | Bicubic sampling |
+| `in_point` | `float` | R | In point (seconds) |
+| `out_point` | `float` | R | Out point (seconds) |
+| `start_time` | `float` | R | Start time (seconds) |
+| `stretch` | `float` | R | Time stretch factor |
+| `blending_mode` | `BlendingMode` | R | Blending mode |
+| `track_matte_type` | `TrackMatteType` | R | Track matte type |
+| `quality` | `LayerQuality` | R | Render quality |
+| `parent` | `Layer \| None` | R | Parent layer |
+| `num_properties` | `int` | R | Number of top-level property groups |
+| `num_effects` | `int` | R | Number of effects |
+| `num_masks` | `int` | R | Number of masks |
+| `time_remap_enabled` | `bool` | R | Whether time remap exists |
+| `time_remap` | `Property \| None` | R | Time remap property |
+| `marker_property` | `MarkerProperty \| None` | R | Layer markers |
 
-### Flags (all read-only)
+#### Transform Shortcuts
 
-| Property | Type | Description |
+| Property | Type | Access | Match Name |
+|---|---|---|---|
+| `transform` | `PropertyGroup \| None` | R | `ADBE Transform Group` |
+| `position` | `Property \| None` | R | `ADBE Position` |
+| `position_x` | `Property \| None` | R | `ADBE Position_0` |
+| `position_y` | `Property \| None` | R | `ADBE Position_1` |
+| `position_z` | `Property \| None` | R | `ADBE Position_2` |
+| `scale` | `Property \| None` | R | `ADBE Scale` |
+| `rotation` | `Property \| None` | R | `ADBE Rotate Z` |
+| `rotation_x` | `Property \| None` | R | `ADBE Rotate X` |
+| `rotation_y` | `Property \| None` | R | `ADBE Rotate Y` |
+| `rotation_z` | `Property \| None` | R | `ADBE Rotate Z` |
+| `opacity` | `Property \| None` | R | `ADBE Opacity` |
+| `anchor_point` | `Property \| None` | R | `ADBE Anchor Point` |
+| `orientation` | `Property \| None` | R | `ADBE Orientation` |
+
+> These return `Property` objects whose `.value` is R/W. Returns `None` if the property doesn't exist in the project. When Position is separated, use `position_x`/`position_y` instead of `position`.
+
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `enabled` | `bool` | Visibility (eye icon) |
-| `solo` | `bool` | Solo switch |
-| `shy` | `bool` | Shy flag |
-| `locked` | `bool` | Lock flag |
-| `null_layer` | `bool` | Is null object |
-| `guide_layer` | `bool` | Is guide layer |
-| `adjustment_layer` | `bool` | Is adjustment layer |
-| `three_d_layer` | `bool` | 3D layer enabled |
-| `auto_orient` | `bool` | Auto-orient |
-| `effects_active` | `bool` | Effects enabled |
-| `motion_blur` | `bool` | Motion blur enabled |
-| `collapse_transformation` | `bool` | Collapse / Continuously rasterize |
-| `sampling_quality` | `bool` | Bicubic sampling |
-
-### Timing (all read-only)
-
-| Property | Type | Description |
-|---|---|---|
-| `in_point` | `float` | In point (seconds) |
-| `out_point` | `float` | Out point (seconds) |
-| `start_time` | `float` | Start time (seconds) |
-| `stretch` | `float` | Time stretch factor |
-
-### Blend / Matte (all read-only)
-
-| Property | Type | Description |
-|---|---|---|
-| `blending_mode` | `BlendingMode \| int` | Blending mode enum (raw int for unknown values) |
-| `track_matte_type` | `TrackMatteType \| int` | Track matte type |
-| `quality` | `LayerQuality` | Render quality |
-
-### Parenting
-
-| Property | Type | Description |
-|---|---|---|
-| `parent` | `Layer \| None` | Parent layer (auto-resolved by ID) |
-
-### Property Access
-
-Three equivalent ways to access the property tree:
-
-```python
-layer.property("Transform")        # method
-layer("Transform")                 # __call__ (raises KeyError if missing)
-layer["Transform"]                 # __getitem__ (raises KeyError if missing)
-```
-
-| Method | Type | Description |
-|---|---|---|
-| `property(name_or_index)` | `Any \| None` | Lookup property by match_name, display name, or 1-based index |
-| `num_properties` | `int` | Number of top-level property groups |
-
-**Name resolution order:**
-1. Exact `match_name` (e.g. `"ADBE Transform Group"`)
-2. Display name via `DISPLAY_NAMES` reverse map (e.g. `"Transform"`)
-3. Case-insensitive display name comparison
-4. Model `.name` attribute (user-defined names)
-
-### Transform Shortcuts
-
-Direct access to common transform properties. Each returns a `Property` (read-write via `.value` setter) or `None` if not present:
-
-| Property | Match Name | Description |
-|---|---|---|
-| `transform` | `ADBE Transform Group` | Transform group |
-| `position` | `ADBE Position` | Position (combined) |
-| `position_x` | `ADBE Position_0` | X Position (when separated) |
-| `position_y` | `ADBE Position_1` | Y Position (when separated) |
-| `position_z` | `ADBE Position_2` | Z Position (when separated) |
-| `scale` | `ADBE Scale` | Scale |
-| `rotation` | `ADBE Rotate Z` | Rotation (2D / Z Rotation) |
-| `rotation_x` | `ADBE Rotate X` | X Rotation |
-| `rotation_y` | `ADBE Rotate Y` | Y Rotation |
-| `rotation_z` | `ADBE Rotate Z` | Z Rotation |
-| `opacity` | `ADBE Opacity` | Opacity |
-| `anchor_point` | `ADBE Anchor Point` | Anchor Point |
-| `orientation` | `ADBE Orientation` | Orientation (3D) |
-
-> **Note:** When Position is separated into dimensions, `layer.position` returns `None`. Use `layer.position_x` / `layer.position_y` instead. Properties that haven't been modified from their default value may not be present in the parsed data.
-
-### Time Remap
-
-| Property | Type | Description |
-|---|---|---|
-| `time_remap_enabled` | `bool` | Whether time remap exists |
-| `time_remap` | `Property \| None` | Time remap property |
-
-### Effects
-
-| Property / Method | Type | Description |
-|---|---|---|
-| `num_effects` | `int` | Number of effects |
-| `effect(name_or_index)` | `Effect \| None` | Get effect by 1-based index or name |
-
-### Masks
-
-| Property / Method | Type | Description |
-|---|---|---|
-| `num_masks` | `int` | Number of masks |
+| `property(name_or_index)` | `Any \| None` | Get property by match name, display name, or 1-based index |
+| `effect(name_or_index)` | `Effect \| None` | Get effect by name or 1-based index |
 | `mask(index)` | `Mask \| None` | Get mask by 1-based index |
 
-### Markers
+### Property Access (3 equivalent forms)
 
-| Property | Type | Description |
-|---|---|---|
-| `marker_property` | `MarkerProperty \| None` | Layer markers |
+```python
+layer.property("Transform")     # returns None if not found
+layer("Transform")              # raises KeyError if not found
+layer["Transform"]              # raises KeyError if not found
+```
+
+**Name resolution order:** exact match_name > display name > case-insensitive > model `.name`
+
+### Example
+
+```python
+layer = comp.layer(1)
+layer.name = "Background"
+print(layer.position.value)       # [960, 540]
+print(layer.opacity.value)        # 1.0
+print(layer.in_point)             # 0.0
+
+# Chaining
+layer("Transform")("Position").value
+```
 
 ---
 
-## Layer Subclasses
+## AVLayer (extends Layer)
 
-### AVLayer
+Asset-based layer (footage, solid, precomp).
 
-Asset-based layer (footage, solid, precomp). Inherits all `Layer` properties.
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `source` | `Any \| None` | R | Source item (ImageAsset, SolidAsset, Composition) |
 
-| Property | Type | Description |
-|---|---|---|
-| `source` | `Any \| None` | Source asset from project (ImageAsset, SolidAsset, Composition) |
+---
 
-### TextLayer
+## TextLayer (extends Layer)
 
-| Property | Type | Description |
-|---|---|---|
-| `source_text` | `TextSourceProperty \| None` | Text source property |
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `source_text` | `TextSourceProperty \| None` | R | Text source property |
 
 ```python
 layer.source_text.text     # "Hello World"
 layer.source_text.fonts    # ["Arial"]
 ```
 
-### ShapeLayer
+---
 
-| Property | Type | Description |
-|---|---|---|
-| `contents` | `PropertyGroup \| None` | Shape contents group |
+## ShapeLayer (extends Layer)
 
-### CameraLayer
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `contents` | `PropertyGroup \| None` | R | Shape contents group (`ADBE Root Vectors Group`) |
 
-| Property | Type | Description |
-|---|---|---|
-| `camera_options` | `PropertyGroup \| None` | Camera options group |
+---
 
-### LightLayer
+## CameraLayer (extends Layer)
 
-Placeholder for future expansion. Inherits all `Layer` properties.
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `camera_options` | `PropertyGroup \| None` | R | Camera options group |
+
+---
+
+## LightLayer (extends Layer)
+
+No additional properties.
 
 ---
 
 ## Property
 
-Wraps a single animated property value.
+Wraps a single animatable property (position, opacity, scale, etc.).
 
-### Read Properties
+### Properties
 
-| Property | Type | Description |
-|---|---|---|
-| `name` | `str` | Display name |
-| `match_name` | `str` | AE internal match name |
-| `value` | `Any` | **RW** — Current value (static or first keyframe) |
-| `num_keys` | `int` | Number of keyframes |
-| `is_time_varying` | `bool` | Has multiple keyframes |
-| `expression` | `str \| None` | Expression string |
-| `expression_enabled` | `bool` | Whether expression exists |
-| `dimensions_separated` | `bool` | Position split into X/Y/Z |
-| `is_spatial` | `bool` | Is spatial property |
-| `property_value_type` | `PropertyValueType` | Value type enum |
-| `keys` | `list[KeyframeValue]` | All keyframes (1-based index) |
-
-### Value Types
-
-Values are returned as plain Python types:
-
-| Model Type | Python Type |
-|---|---|
-| `Vector(x, y)` | `[x, y]` |
-| `Vector(x, y, z)` | `[x, y, z]` |
-| `Color(r, g, b, a)` | `[r, g, b, a]` |
-| `float` | `float` |
-| `LayerRef` | `int` (layer ID) |
-
-### Setting Static Values
-
-```python
-layer.position.value = [500.0, 300.0]     # set position
-layer.opacity.value = 0.5                  # set opacity to 50%
-layer.scale.value = [1.2, 1.2, 1.2]       # set scale to 120%
-```
-
-> **Note:** AE stores Scale and Opacity as 0-1 fractions internally (1.0 = 100%).
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `name` | `str` | R | Display name |
+| `match_name` | `str` | R | AE internal match name |
+| `value` | `Any` | R/W | Static value (or value at first keyframe) |
+| `num_keys` | `int` | R | Number of keyframes (0 = not animated) |
+| `is_time_varying` | `bool` | R | Has multiple keyframes |
+| `expression` | `str \| None` | R | Expression string |
+| `expression_enabled` | `bool` | R | Whether expression is set |
+| `dimensions_separated` | `bool` | R | Position is split into X/Y/Z |
+| `is_spatial` | `bool` | R | Is spatial property |
+| `property_value_type` | `PropertyValueType` | R | Value type enum |
+| `keys` | `list[KeyframeValue]` | R | All keyframes |
 
 ### Keyframe Read Methods
 
-All keyframe indices are **1-based**.
-
-| Method | Return | Description |
+| Method | Returns | Description |
 |---|---|---|
-| `key(index)` | `KeyframeValue` | Keyframe at index |
+| `key(index)` | `KeyframeValue` | Keyframe at 1-based index |
 | `key_value(index)` | `Any` | Value at keyframe |
 | `key_time(index)` | `float` | Time at keyframe (seconds) |
 | `key_in_interpolation_type(index)` | `KeyframeInterpolationType` | Incoming interpolation |
 | `key_out_interpolation_type(index)` | `KeyframeInterpolationType` | Outgoing interpolation |
-| `key_in_temporal_ease(index)` | `list[dict]` | `[{"speed": ..., "influence": ...}]` |
-| `key_out_temporal_ease(index)` | `list[dict]` | `[{"speed": ..., "influence": ...}]` |
+| `key_in_temporal_ease(index)` | `list[dict]` | Incoming ease `[{"speed", "influence"}]` |
+| `key_out_temporal_ease(index)` | `list[dict]` | Outgoing ease `[{"speed", "influence"}]` |
 | `key_in_spatial_tangent(index)` | `list[float] \| None` | Incoming spatial tangent |
 | `key_out_spatial_tangent(index)` | `list[float] \| None` | Outgoing spatial tangent |
 | `key_roving(index)` | `bool` | Is roving keyframe |
-| `nearest_key_index(t)` | `int` | 1-based index of nearest key to time `t` |
+| `nearest_key_index(t)` | `int` | Index of nearest keyframe to time `t` |
+| `value_at_time(t)` | `Any` | Interpolated value at time `t` |
 
 ### Keyframe Write Methods
 
-| Method | Description |
+| Method | Returns | Description |
+|---|---|---|
+| `set_value_at_key(index, value)` | `None` | Set keyframe value |
+| `set_value_at_time(time, value)` | `None` | Set value at nearest keyframe to `time` |
+| `set_interpolation_type_at_key(index, in_type, out_type=None)` | `None` | Set in/out interpolation type |
+| `set_temporal_ease_at_key(index, in_ease=None, out_ease=None)` | `None` | Set temporal ease |
+
+### Value Types
+
+| AE Type | Python Type |
 |---|---|
-| `set_value_at_key(key_index, value)` | Set keyframe value (1-based index) |
-| `set_value_at_time(time, value)` | Set value at nearest keyframe to `time` |
-| `set_interpolation_type_at_key(key_index, in_type, out_type=None)` | Set in/out interpolation |
-| `set_temporal_ease_at_key(key_index, in_ease=None, out_ease=None)` | Set temporal ease |
+| 2D position / vector | `[x, y]` |
+| 3D position / vector | `[x, y, z]` |
+| Color | `[r, g, b, a]` |
+| Scalar (opacity, rotation...) | `float` |
+| Layer reference | `int` (layer ID) |
+
+> Scale and Opacity are stored as 0-1 fractions (1.0 = 100%).
+
+### Example
 
 ```python
 pos = layer.position
 
 # Read
-pos.value                      # [960, 540]
-pos.num_keys                   # 2
-pos.key_value(1)               # [0, 0]
-pos.key_time(2)                # 1.0
-pos.value_at_time(0.5)         # [480, 270]
+pos.value                     # [960, 540]
+pos.num_keys                  # 2
+pos.key_value(1)              # [0, 0]
+pos.key_time(2)               # 1.0
+pos.value_at_time(0.5)        # [480, 270]
 
-# Write keyframe value
+# Write static value
+pos.value = [500.0, 300.0]
+
+# Write keyframe
 pos.set_value_at_key(1, [100.0, 200.0])
 
 # Write interpolation
-from aep_tools import KeyframeInterpolationType
-pos.set_interpolation_type_at_key(
-    1,
-    in_type=KeyframeInterpolationType.BEZIER,
-    out_type=KeyframeInterpolationType.HOLD,
-)
+from aep_tools import KeyframeInterpolationType as KIT
+pos.set_interpolation_type_at_key(1, in_type=KIT.BEZIER, out_type=KIT.HOLD)
 
-# Write temporal ease
+# Write ease
 pos.set_temporal_ease_at_key(1,
     in_ease=[{"speed": 0.0, "influence": 33.33}],
     out_ease=[{"speed": 0.0, "influence": 33.33}],
 )
 ```
 
-#### Interpolation Semantics
-
-In AEP binary, each keyframe stores one `transition_type` that controls the **outgoing** curve. So:
-- `out_type` sets this keyframe's transition_type
-- `in_type` sets the **previous** keyframe's transition_type (key_index - 1)
-
-If `out_type` is `None`, it defaults to `in_type` (same as AE behavior when only one type is specified).
-
-### Interpolation
-
-| Method | Return | Description |
-|---|---|---|
-| `value_at_time(t)` | `Any` | Evaluate at time `t` (linear + hold interpolation) |
-
 ---
 
 ## PropertyGroup
 
-Wraps a group of properties. Supports chaining, indexing, and iteration. All properties are **read-only**.
+Wraps a group of properties. Supports chaining.
 
-| Property / Method | Type | Description |
+### Properties
+
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `name` | `str` | R | Group name |
+| `match_name` | `str` | R | AE match name |
+| `enabled` | `bool \| None` | R | Enabled state |
+| `num_properties` | `int` | R | Number of children |
+
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `name` | `str` | Group name |
-| `match_name` | `str` | AE match name |
-| `enabled` | `bool \| None` | Enabled state (for toggleable groups) |
-| `num_properties` | `int` | Number of children |
-| `property(name_or_index)` | `Any \| None` | Lookup child |
+| `property(name_or_index)` | `Any \| None` | Get child by name or 1-based index |
 
-### Access Patterns
+Supports `__call__`, `__getitem__`, `__len__`, `__iter__`.
+
+### Example
 
 ```python
-group.property("Opacity")    # by name
-group.property(1)            # by 1-based index
-group("Opacity")             # __call__ (raises KeyError)
-group["Opacity"]             # __getitem__ (raises KeyError)
-len(group)                   # num_properties
-for prop in group:           # iterate children
+transform = layer("Transform")
+transform("Position").value         # [960, 540]
+transform.property(1).value         # anchor point
+len(transform)                      # number of children
+
+for prop in transform:
     print(prop.name)
 ```
 
@@ -440,44 +364,52 @@ for prop in group:           # iterate children
 
 ## Effect
 
-All properties are **read-only**.
+### Properties
 
-| Property / Method | Type | Description |
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `name` | `str` | R | Effect name |
+| `match_name` | `str` | R | AE match name |
+| `enabled` | `bool` | R | Enabled state |
+| `num_params` | `int` | R | Number of parameters |
+
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `name` | `str` | Effect display name |
-| `match_name` | `str` | AE match name |
-| `enabled` | `bool` | Enabled state |
-| `num_params` | `int` | Number of parameters |
 | `param(name_or_index)` | `Any \| None` | Get parameter by name or 1-based index |
 
-Supports `__call__` and `__getitem__`:
+Supports `__call__` and `__getitem__`.
+
+### Example
 
 ```python
-layer.effect(1)                 # first effect
-layer.effect("Gaussian Blur")   # by name
 eff = layer.effect(1)
-eff.param(1).value              # first parameter value
-eff("Blurriness").value         # by parameter name
+eff = layer.effect("Gaussian Blur")
+eff.param(1).value                   # first parameter
+eff("Blurriness").value              # by name
 ```
 
 ---
 
 ## Mask
 
-All properties are **read-only**.
+### Properties
 
-| Property | Type | Description |
-|---|---|---|
-| `name` | `str` | Mask name |
-| `match_name` | `str` | AE match name |
-| `mode` | `MaskMode` | Mask mode (ADD, SUBTRACT, etc.) |
-| `inverted` | `bool` | Inverted |
-| `locked` | `bool` | Locked |
-| `index` | `int` | 1-based index |
-| `mask_path` | `Property \| None` | Mask path shape |
-| `mask_feather` | `Property \| None` | Feather |
-| `mask_opacity` | `Property \| None` | Opacity |
-| `mask_expansion` | `Property \| None` | Expansion |
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `name` | `str` | R | Mask name |
+| `match_name` | `str` | R | AE match name |
+| `mode` | `MaskMode` | R | Mask mode |
+| `inverted` | `bool` | R | Inverted |
+| `locked` | `bool` | R | Locked |
+| `index` | `int` | R | 1-based index |
+| `mask_path` | `Property \| None` | R | Mask path shape |
+| `mask_feather` | `Property \| None` | R | Feather |
+| `mask_opacity` | `Property \| None` | R | Opacity |
+| `mask_expansion` | `Property \| None` | R | Expansion |
+
+### Example
 
 ```python
 m = layer.mask(1)
@@ -487,27 +419,36 @@ m.mask_opacity.value      # 100.0
 
 ---
 
-## MarkerProperty / MarkerValue
+## MarkerProperty
 
-All properties are **read-only**.
+### Properties
 
-### MarkerProperty
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `num_keys` | `int` | R | Number of markers |
 
-| Property / Method | Type | Description |
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `num_keys` | `int` | Number of markers |
 | `key_value(index)` | `MarkerValue` | Marker at 1-based index |
-| `key_time(index)` | `float` | Time at marker |
+| `key_time(index)` | `float` | Time of marker (seconds) |
 | `nearest_key_index(t)` | `int` | Nearest marker to time `t` |
 
-### MarkerValue
+---
 
-| Property | Type | Description |
-|---|---|---|
-| `comment` | `str` | Marker comment text |
-| `duration` | `float` | Duration (seconds) |
-| `label` | `int` | Label color index |
-| `time` | `float` | Time (seconds) |
+## MarkerValue
+
+### Properties
+
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `comment` | `str` | R | Comment text |
+| `duration` | `float` | R | Duration (seconds) |
+| `label` | `int` | R | Label color index |
+| `time` | `float` | R | Time (seconds) |
+
+### Example
 
 ```python
 mp = comp.marker_property
@@ -519,213 +460,106 @@ print(mv.comment, mv.time)    # "Intro" 1.0
 
 ## TextSourceProperty
 
-All properties are **read-only**.
+### Properties
 
-| Property / Method | Type | Description |
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `text` | `str` | R | Current text string |
+| `value` | `TextDocument \| None` | R | Full TextDocument |
+| `fonts` | `list[str]` | R | Font family names |
+| `num_keys` | `int` | R | Number of text keyframes |
+
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `text` | `str` | Current text string |
-| `value` | `TextDocument \| None` | Full TextDocument object |
-| `fonts` | `list[str]` | Font family names |
-| `num_keys` | `int` | Number of text keyframes |
 | `key_value(index)` | `TextDocument \| None` | TextDocument at keyframe |
-| `key_time(index)` | `float` | Time at keyframe |
+| `key_time(index)` | `float` | Time at keyframe (seconds) |
 
 ---
 
 ## KeyframeValue
 
-All properties are **read-only**.
+### Properties
 
-| Property | Type | Description |
-|---|---|---|
-| `index` | `int` | 1-based index |
-| `time` | `float` | Time (seconds) |
-| `value` | `Any` | Converted value |
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `index` | `int` | R | 1-based index |
+| `time` | `float` | R | Time (seconds) |
+| `value` | `Any` | R | Value |
 
 ---
 
-## Project Items
+## FolderItem
 
-### FolderItem
+### Properties
 
-All properties are **read-only**.
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `type_name` | `str` | R | `"Folder"` |
+| `name` | `str` | R | Folder name |
+| `id` | `int` | R | Internal ID |
+| `num_items` | `int` | R | Child count |
+| `items` | `ItemCollection` | R | Children (1-based) |
 
-| Property | Type | Description |
-|---|---|---|
-| `type_name` | `str` | `"Folder"` |
-| `name` | `str` | Folder name |
-| `id` | `int` | Internal ID |
-| `num_items` | `int` | Child count |
-| `items` | `ItemCollection` | Children (1-based) |
+---
 
-### FootageItem
+## FootageItem
 
-| Property | Type | R/W | Description |
+### Properties
+
+| Property | Type | Access | Description |
 |---|---|---|---|
 | `type_name` | `str` | R | `"Footage"` or `"Solid"` |
 | `name` | `str` | R | Item name |
 | `id` | `int` | R | Internal ID |
 | `width` | `int` | R | Width in pixels |
 | `height` | `int` | R | Height in pixels |
-| `file` | `str \| None` | **RW** | File path (footage only, raises `TypeError` on solids) |
+| `file` | `str \| None` | R/W | File path (footage only) |
 | `color` | `list[float] \| None` | R | `[r, g, b, a]` (solid only) |
 
-```python
-# Read footage path
-item = proj.item(1)
-print(item.file)              # "/path/to/footage.mov"
+### Example
 
-# Change footage path
-item.file = "/new/path/to/footage.mov"
+```python
+item = proj.item(1)
+print(item.file)                     # "/path/to/footage.mov"
+item.file = "/new/path.mov"          # update path
 proj.save("output.aep")
 ```
 
-### RenderQueue
+---
 
-| Property / Method | Type | Description |
+## RenderQueue
+
+### Properties
+
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `num_items` | `int` | R | Number of items |
+
+### Methods
+
+| Method | Returns | Description |
 |---|---|---|
-| `num_items` | `int` | Number of render queue items |
 | `item(index)` | `RenderQueueItem \| None` | Get by 1-based index |
 
-### RenderQueueItem
-
-| Property / Method | Type | Description |
-|---|---|---|
-| `comp_name` | `str` | Composition name |
-| `status` | `int` | Render status code |
-| `num_output_modules` | `int` | Number of output modules |
-| `output_module(index)` | `OutputModule \| None` | Get by 1-based index |
-
 ---
 
-## Write-Back (Binary .aep Only)
+## RenderQueueItem
 
-Projects opened from binary `.aep` files support modification and saving. The `writable` property indicates availability.
+### Properties
 
-### Saving
-
-```python
-proj = Project.open("input.aep")
-assert proj.writable  # True for .aep, False for .aepx
-
-# Save to a new file
-proj.save("output.aep")
-
-# Overwrite original
-proj.save()
-```
-
-### Property-Level Write (Recommended)
-
-The simplest way to modify values — use property setters directly:
-
-```python
-comp = proj.comp("Main Comp")
-layer = comp.layer(1)
-
-# Static value
-layer.position.value = [500.0, 300.0]
-layer.opacity.value = 0.5
-
-# Keyframe value
-layer.position.set_value_at_key(1, [100.0, 200.0])
-
-# Keyframe interpolation
-from aep_tools import KeyframeInterpolationType
-layer.position.set_interpolation_type_at_key(1,
-    in_type=KeyframeInterpolationType.LINEAR,
-    out_type=KeyframeInterpolationType.BEZIER,
-)
-
-# Keyframe temporal ease
-layer.position.set_temporal_ease_at_key(1,
-    in_ease=[{"speed": 0.0, "influence": 33.33}],
-    out_ease=[{"speed": 100.0, "influence": 33.33}],
-)
-
-# Composition name
-comp.name = "New Comp Name"
-
-# Footage file path
-footage = proj.item(3)  # a FootageItem
-footage.file = "/new/path/to/file.mov"
-
-proj.save("output.aep")
-```
-
-### Low-Level Write (Project Methods)
-
-For cases where you need direct control using IDs and match name paths:
-
-```python
-# Rename layer
-proj.change_layer_name(comp.id, layer._model.id, "New Name")
-
-# Change static property value
-proj.change_property_value(
-    comp.id, layer._model.id,
-    ["ADBE Transform Group", "ADBE Position"],
-    [500.0, 300.0]
-)
-
-# Change keyframe value (1-based index)
-proj.change_keyframe_value(
-    comp.id, layer._model.id,
-    ["ADBE Transform Group", "ADBE Position"],
-    1, [100.0, 200.0]
-)
-
-# Change keyframe time
-proj.change_keyframe_time(
-    comp.id, layer._model.id,
-    ["ADBE Transform Group", "ADBE Position"],
-    1, 2.5  # new time in seconds
-)
-
-# Change keyframe interpolation (1=linear, 2=bezier, 3=hold)
-proj.change_keyframe_interpolation(
-    comp.id, layer._model.id,
-    ["ADBE Transform Group", "ADBE Position"],
-    1, 3  # hold
-)
-
-# Change keyframe temporal ease
-proj.change_keyframe_ease(
-    comp.id, layer._model.id,
-    ["ADBE Transform Group", "ADBE Position"],
-    1,
-    in_speed=[0.0], in_influence=[33.33],
-    out_speed=[0.0], out_influence=[33.33],
-)
-
-# Change footage asset path
-proj.change_asset_path(asset_id, "/new/path/to/file.mov")
-
-proj.save("output.aep")
-```
-
-> **Note:** AE stores Scale and Opacity as 0-1 fractions internally (1.0 = 100%). When writing values, use fractions, not percentages. If a Transform property (Anchor Point, Position, Scale, Rotation, Opacity) doesn't exist in the binary, it will be created automatically with the correct chunk structure.
-
-### Version Info
-
-```python
-proj.ae_version    # "25.6" -- AE version that last saved this file (None for .aepx)
-```
-
----
-
-## Read/Write Summary
-
-| What | Read | Write (property-level) | Write (low-level) |
+| Property | Type | Access | Description |
 |---|---|---|---|
-| Comp name | `comp.name` | `comp.name = "..."` | — |
-| Layer name | `layer.name` | `layer.name = "..."` | `proj.change_layer_name(...)` |
-| Property static value | `prop.value` | `prop.value = ...` | `proj.change_property_value(...)` |
-| Keyframe value | `prop.key_value(i)` | `prop.set_value_at_key(i, v)` | `proj.change_keyframe_value(...)` |
-| Keyframe time | `prop.key_time(i)` | — | `proj.change_keyframe_time(...)` |
-| Keyframe interpolation | `prop.key_in/out_interpolation_type(i)` | `prop.set_interpolation_type_at_key(i, in, out)` | `proj.change_keyframe_interpolation(...)` |
-| Keyframe ease | `prop.key_in/out_temporal_ease(i)` | `prop.set_temporal_ease_at_key(i, in, out)` | `proj.change_keyframe_ease(...)` |
-| Footage file path | `item.file` | `item.file = "..."` | `proj.change_asset_path(...)` |
+| `comp_name` | `str` | R | Composition name |
+| `status` | `int` | R | Render status |
+| `num_output_modules` | `int` | R | Number of output modules |
+
+### Methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `output_module(index)` | `OutputModule \| None` | Get by 1-based index |
 
 ---
 
@@ -733,41 +567,105 @@ proj.ae_version    # "25.6" -- AE version that last saved this file (None for .a
 
 ### BlendingMode
 
-`NORMAL(1)` `DARKEN(3)` `MULTIPLY(4)` `COLOR_BURN(5)` `LINEAR_BURN(6)` `DARKER_COLOR(7)` `LIGHTEN(9)` `SCREEN(10)` `COLOR_DODGE(11)` `LINEAR_DODGE(12)` `LIGHTER_COLOR(13)` `OVERLAY(15)` `SOFT_LIGHT(16)` `HARD_LIGHT(17)` `LINEAR_LIGHT(18)` `VIVID_LIGHT(19)` `PIN_LIGHT(20)` `HARD_MIX(21)` `DIFFERENCE(23)` `EXCLUSION(24)` `HUE(26)` `SATURATION(27)` `COLOR(28)` `LUMINOSITY(29)`
+| Value | Name |
+|---|---|
+| 1 | NORMAL |
+| 3 | DARKEN |
+| 4 | MULTIPLY |
+| 5 | COLOR_BURN |
+| 6 | LINEAR_BURN |
+| 7 | DARKER_COLOR |
+| 9 | LIGHTEN |
+| 10 | SCREEN |
+| 11 | COLOR_DODGE |
+| 12 | LINEAR_DODGE |
+| 13 | LIGHTER_COLOR |
+| 15 | OVERLAY |
+| 16 | SOFT_LIGHT |
+| 17 | HARD_LIGHT |
+| 18 | LINEAR_LIGHT |
+| 19 | VIVID_LIGHT |
+| 20 | PIN_LIGHT |
+| 21 | HARD_MIX |
+| 23 | DIFFERENCE |
+| 24 | EXCLUSION |
+| 26 | HUE |
+| 27 | SATURATION |
+| 28 | COLOR |
+| 29 | LUMINOSITY |
 
 ### TrackMatteType
 
-`NONE(0)` `ALPHA(1)` `ALPHA_INVERTED(2)` `LUMA(3)` `LUMA_INVERTED(4)`
+| Value | Name |
+|---|---|
+| 0 | NONE |
+| 1 | ALPHA |
+| 2 | ALPHA_INVERTED |
+| 3 | LUMA |
+| 4 | LUMA_INVERTED |
 
 ### MaskMode
 
-`NONE(0)` `ADD(1)` `SUBTRACT(2)` `INTERSECT(3)` `DARKEN(4)` `LIGHTEN(5)` `DIFFERENCE(6)`
+| Value | Name |
+|---|---|
+| 0 | NONE |
+| 1 | ADD |
+| 2 | SUBTRACT |
+| 3 | INTERSECT |
+| 4 | DARKEN |
+| 5 | LIGHTEN |
+| 6 | DIFFERENCE |
 
 ### KeyframeInterpolationType
 
-`LINEAR(1)` `BEZIER(2)` `HOLD(3)`
+| Value | Name |
+|---|---|
+| 1 | LINEAR |
+| 2 | BEZIER |
+| 3 | HOLD |
 
 ### LayerQuality
 
-`WIREFRAME(0)` `DRAFT(1)` `BEST(2)`
+| Value | Name |
+|---|---|
+| 0 | WIREFRAME |
+| 1 | DRAFT |
+| 2 | BEST |
 
 ### LayerType
 
-`ASSET(0)` `LIGHT(1)` `CAMERA(2)` `TEXT(3)` `SHAPE(4)`
+| Value | Name |
+|---|---|
+| 0 | ASSET |
+| 1 | LIGHT |
+| 2 | CAMERA |
+| 3 | TEXT |
+| 4 | SHAPE |
 
 ### PropertyValueType
 
-`COLOR(0)` `SCALAR(1)` `SPATIAL(2)` `MULTIDIMENSIONAL(3)` `LAYER_REF(4)` `CUSTOM(5)` `UINT(6)`
+| Value | Name |
+|---|---|
+| 0 | COLOR |
+| 1 | SCALAR |
+| 2 | SPATIAL |
+| 3 | MULTIDIMENSIONAL |
+| 4 | LAYER_REF |
+| 5 | CUSTOM |
+| 6 | UINT |
 
 ### AutoOrientType
 
-`NO_AUTO_ORIENT(0)` `ALONG_PATH(1)` `CAMERA_OR_POINT_OF_INTEREST(2)` `CHARACTERS_TOWARD_CAMERA(3)`
+| Value | Name |
+|---|---|
+| 0 | NO_AUTO_ORIENT |
+| 1 | ALONG_PATH |
+| 2 | CAMERA_OR_POINT_OF_INTEREST |
+| 3 | CHARACTERS_TOWARD_CAMERA |
 
 ---
 
-## AE Match Name Reference
-
-Common match names used for property lookup:
+## Match Name Reference
 
 | Match Name | Display Name |
 |---|---|
@@ -787,11 +685,9 @@ Common match names used for property lookup:
 | `ADBE Text Document` | Source Text |
 | `ADBE Root Vectors Group` | Contents |
 | `ADBE Camera Options Group` | Camera Options |
-| `ADBE Light Options Group` | Light Options |
-| `ADBE Material Options Group` | Material Options |
 | `ADBE Mask Shape` | Mask Path |
 | `ADBE Mask Feather` | Mask Feather |
 | `ADBE Mask Opacity` | Mask Opacity |
 | `ADBE Mask Offset` | Mask Expansion |
 
-You can use either the match name or the display name when looking up properties.
+Both match names and display names can be used for property lookup.
