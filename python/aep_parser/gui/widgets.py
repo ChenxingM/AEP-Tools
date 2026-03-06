@@ -214,21 +214,23 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
         # Column 1: name
         layer_item.setText(1, name)
 
-        # Column 2: type + blend mode + flags + timing
+        # Column 2: attributes (blend mode + flags)
         flags = layer.get("flags", {})
         blend_mode = layer.get("blendMode", "")
         blend_name = _BLEND_MODE_NAMES.get(blend_mode, "") if blend_mode else ""
         ftags = _flag_tags(flags)
 
-        info_parts = [f"[{label}]"]
+        attr_parts = []
         if blend_name and blend_name != "Normal":
-            info_parts.append(blend_name)
+            attr_parts.append(blend_name)
         if ftags:
-            info_parts.append(ftags)
+            attr_parts.append(ftags)
+        layer_item.setText(2, "  ".join(attr_parts))
+
+        # Column 3: type + timing
         in_t = layer.get("inTime", 0)
         out_t = layer.get("outTime", 0)
-        info_parts.append(f"{in_t:.2f} \u2192 {out_t:.2f}s")
-        layer_item.setText(2, "  ".join(info_parts))
+        layer_item.setText(3, f"[{label}]  {in_t:.2f} \u2192 {out_t:.2f}s")
 
         # Data roles on column 0
         layer_item.setData(0, ROLE_NODE_TYPE, "layer")
@@ -243,6 +245,7 @@ def build_layer_tree(tree: QTreeWidget, layers: list[dict],
         layer_item.setFont(1, font)
         layer_item.setForeground(1, QColor(color))
         layer_item.setForeground(2, COLOR_TEXT_DIM)
+        layer_item.setForeground(3, COLOR_TEXT_DIM)
 
         if not flags.get("visible", True):
             layer_item.setForeground(1, QColor("#555555"))
@@ -306,10 +309,10 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
             elif "fonts" in val and "documents" in val:
                 item.setData(0, ROLE_NODE_TYPE, "property")
                 item.setData(0, ROLE_MATCH_PATH, cur_path)
-                item.setText(2, fmt_val(val))
+                item.setText(3, fmt_val(val))
                 kfs = get_keyframes(val.get("documents", {}))
                 if kfs:
-                    item.setData(3, ROLE_KEYFRAMES, kfs)
+                    item.setData(4, ROLE_KEYFRAMES, kfs)
                     item.setForeground(1, COLOR_TEXT_ANIM)
 
             # MaskData
@@ -327,19 +330,19 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 item.setData(0, ROLE_NODE_TYPE, "property")
                 item.setData(0, ROLE_MATCH_PATH, cur_path)
                 static_val = val.get("value")
-                item.setText(2, fmt_val(static_val))
+                item.setText(3, fmt_val(static_val))
 
                 swatch = get_color_swatch(static_val)
                 if swatch:
-                    item.setBackground(2, swatch)
+                    item.setBackground(3, swatch)
                     lum = swatch.red() * 0.299 + swatch.green() * 0.587 + swatch.blue() * 0.114
-                    item.setForeground(2, QColor("#000000" if lum > 128 else "#ffffff"))
+                    item.setForeground(3, QColor("#000000" if lum > 128 else "#ffffff"))
 
                 kfs = get_keyframes(val)
                 if kfs:
-                    item.setData(3, ROLE_KEYFRAMES, kfs)
+                    item.setData(4, ROLE_KEYFRAMES, kfs)
                     item.setForeground(1, COLOR_TEXT_ANIM)
-                    item.setText(2, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
+                    item.setText(3, fmt_val(static_val) or f"\u25c6 {len(kfs)} keys")
                     _build_keyframe_children(item, kfs)
                 else:
                     item.setForeground(1, COLOR_TEXT)
@@ -353,9 +356,9 @@ def _build_props(parent: QTreeWidgetItem, props: list[dict],
                 item.setForeground(1, COLOR_TEXT_DIM)
 
             else:
-                item.setText(2, fmt_val(val))
+                item.setText(3, fmt_val(val))
         else:
-            item.setText(2, fmt_val(val))
+            item.setText(3, fmt_val(val))
 
         parent.addChild(item)
 
@@ -394,10 +397,10 @@ def _build_keyframe_children(parent: QTreeWidgetItem, kfs: list[dict]):
 
         kf_item = QTreeWidgetItem()
         kf_item.setText(1, label)
-        kf_item.setText(2, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
+        kf_item.setText(3, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
         color = COLOR_KF_HOLD if out_trans == "hold" else COLOR_KF
         kf_item.setForeground(1, color)
-        kf_item.setForeground(2, COLOR_TEXT_DIM)
+        kf_item.setForeground(3, COLOR_TEXT_DIM)
         kf_item.setData(0, ROLE_NODE_TYPE, "keyframe")
         kf_item.setData(0, ROLE_KEY_INDEX, i)
         kf_item.setData(0, ROLE_KEY_DATA, kf)
@@ -419,9 +422,9 @@ def _build_keyframe_children(parent: QTreeWidgetItem, kfs: list[dict]):
                 ease_parts.append(f"Out: {' '.join(pairs)}")
             ease_item = QTreeWidgetItem()
             ease_item.setText(1, "Temporal Ease")
-            ease_item.setText(2, "  |  ".join(ease_parts))
+            ease_item.setText(3, "  |  ".join(ease_parts))
             ease_item.setForeground(1, COLOR_TEXT_DIM)
-            ease_item.setForeground(2, COLOR_TEXT_DIM)
+            ease_item.setForeground(3, COLOR_TEXT_DIM)
             kf_item.addChild(ease_item)
 
         # Spatial tangents
@@ -435,18 +438,18 @@ def _build_keyframe_children(parent: QTreeWidgetItem, kfs: list[dict]):
                 parts.append(f"In: {fmt_val(in_tan)}")
             if out_tan:
                 parts.append(f"Out: {fmt_val(out_tan)}")
-            tan_item.setText(2, "  |  ".join(parts))
+            tan_item.setText(3, "  |  ".join(parts))
             tan_item.setForeground(1, COLOR_TEXT_DIM)
-            tan_item.setForeground(2, COLOR_TEXT_DIM)
+            tan_item.setForeground(3, COLOR_TEXT_DIM)
             kf_item.addChild(tan_item)
 
         # Roving
         if kf.get("roving"):
             rov_item = QTreeWidgetItem()
             rov_item.setText(1, "Roving")
-            rov_item.setText(2, "Yes")
+            rov_item.setText(3, "Yes")
             rov_item.setForeground(1, COLOR_TEXT_DIM)
-            rov_item.setForeground(2, COLOR_TEXT_DIM)
+            rov_item.setForeground(3, COLOR_TEXT_DIM)
             kf_item.addChild(rov_item)
 
         parent.addChild(kf_item)
@@ -532,8 +535,8 @@ class CompWidget(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setExpandsOnDoubleClick(False)
-        self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["#", "Name", "Value", "Keyframes"])
+        self.tree.setColumnCount(5)
+        self.tree.setHeaderLabels(["#", "Name", "Attributes", "Value", "Keyframes"])
         self.tree.setTextElideMode(Qt.ElideNone)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tree.setHorizontalScrollMode(QTreeWidget.ScrollPerPixel)
@@ -543,15 +546,17 @@ class CompWidget(QWidget):
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
         header.setSectionResizeMode(2, QHeaderView.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.resizeSection(0, 50)
-        header.resizeSection(1, 380)
-        header.resizeSection(2, 220)
+        header.resizeSection(1, 300)
+        header.resizeSection(2, 160)
+        header.resizeSection(3, 180)
         header.setMinimumSectionSize(36)
 
         kf_delegate = KeyframeDelegate(self.tree)
         kf_delegate.set_time_range(in_t, out_t)
-        self.tree.setItemDelegateForColumn(3, kf_delegate)
+        self.tree.setItemDelegateForColumn(4, kf_delegate)
 
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -717,7 +722,7 @@ class CompWidget(QWidget):
             self._tools_project.change_layer_quality(comp_id, layer_id, quality)
 
     def _update_layer_info(self, item: QTreeWidgetItem, blend_name: str | None = None):
-        """Refresh layer info (column 2) after a blend mode or flag change."""
+        """Refresh layer attributes (column 2) after a blend mode or flag change."""
         layer_id = item.data(0, ROLE_LAYER_ID)
         layer_data = None
         for layer in self.comp.get("layers", []):
@@ -726,22 +731,17 @@ class CompWidget(QWidget):
                 break
         if layer_data is None:
             return
-        ltype = resolve_layer_visual_type(layer_data, self._assets)
-        label, _ = LAYER_TYPE_LABELS.get(ltype, ("?", "#cccccc"))
         flags = layer_data.get("flags", {})
         if blend_name is None:
             bm = layer_data.get("blendMode", "")
             blend_name = _BLEND_MODE_NAMES.get(bm, "") if bm else ""
         ftags = _flag_tags(flags)
-        info_parts = [f"[{label}]"]
+        attr_parts = []
         if blend_name and blend_name != "Normal":
-            info_parts.append(blend_name)
+            attr_parts.append(blend_name)
         if ftags:
-            info_parts.append(ftags)
-        in_t = layer_data.get("inTime", 0)
-        out_t = layer_data.get("outTime", 0)
-        info_parts.append(f"{in_t:.2f} \u2192 {out_t:.2f}s")
-        item.setText(2, "  ".join(info_parts))
+            attr_parts.append(ftags)
+        item.setText(2, "  ".join(attr_parts))
 
     def _edit_layer_timing(self, item: QTreeWidgetItem):
         layer_id = item.data(0, ROLE_LAYER_ID)
@@ -779,7 +779,7 @@ class CompWidget(QWidget):
         match_path = item.data(0, ROLE_MATCH_PATH)
         if not match_path:
             return
-        old_text = item.text(2)
+        old_text = item.text(3)
         old_value = _parse_old_value(old_text)
 
         # Multi-dimensional: use separate input dialog
@@ -810,7 +810,7 @@ class CompWidget(QWidget):
         layer_id = layer_item.data(0, ROLE_LAYER_ID)
         comp_id = self.comp.get("id")
         self.tree.blockSignals(True)
-        item.setText(2, fmt_val(new_value))
+        item.setText(3, fmt_val(new_value))
         self.tree.blockSignals(False)
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_property_value(
@@ -866,7 +866,7 @@ class CompWidget(QWidget):
         else:
             interp_text = f"out:{out_str}"
 
-        item.setText(2, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
+        item.setText(3, f"t={time:.3f}s  [{interp_text}]  {fmt_val(value)}")
         color = COLOR_KF_HOLD if out_trans == "hold" else COLOR_KF
         item.setForeground(1, color)
         item.setData(0, ROLE_KEY_DATA, kf_data)
@@ -1028,7 +1028,7 @@ class CompWidget(QWidget):
                     pairs = [f"({s:g}, {inf:g}%)"
                              for s, inf in zip(new_out_spd, new_out_inf)]
                     ease_parts.append(f"Out: {' '.join(pairs)}")
-                child.setText(2, "  |  ".join(ease_parts))
+                child.setText(3, "  |  ".join(ease_parts))
                 break
 
 
