@@ -6,6 +6,7 @@ then writing the result to a new .aep file.
 
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 from typing import Any
@@ -293,6 +294,38 @@ def _find_named_child(cl: ChunkList, match_name: str) -> Chunk | None:
     return None
 
 
+def find_item_chunklist(root: Chunk, item_id: int,
+                        big_endian: bool) -> ChunkList | None:
+    """Find any Item ChunkList by its ID (regardless of item type)."""
+    fold = root.list.find_optional("Fold")
+    if fold is None:
+        return None
+    return _find_item_in_folder(fold.list, item_id, big_endian)
+
+
+def _find_item_in_folder(cl: ChunkList, item_id: int,
+                         big_endian: bool) -> ChunkList | None:
+    for child in cl.children:
+        if child.name == "Item":
+            idta = child.list.find_optional("idta")
+            if idta is not None and isinstance(idta.data, (bytes, bytearray)):
+                r = BinaryReader(idta.data, 0, big_endian)
+                r.skip(2)  # item_type
+                r.skip(14)
+                iid = r.read_uint(4)
+                if iid == item_id:
+                    return child.list
+            # Recurse into folder Items
+            result = _find_item_in_folder(child.list, item_id, big_endian)
+            if result is not None:
+                return result
+        elif child.name == "Sfdr":
+            result = _find_item_in_folder(child.list, item_id, big_endian)
+            if result is not None:
+                return result
+    return None
+
+
 # Modification Functions
 
 
@@ -317,6 +350,46 @@ def set_comp_name(root: Chunk, comp_id: int, new_name: str,
             insert_idx = i + 1
             break
     comp_cl.children.insert(insert_idx, utf8_chunk)
+    return True
+
+
+def set_asset_path(root: Chunk, asset_id: int, new_path: str,
+                   big_endian: bool) -> bool:
+    """Set a footage asset's file path by modifying its Als2 > alas chunk.
+
+    The alas chunk contains JSON with a 'fullpath' key. This function
+    updates that key while preserving all other metadata.
+
+    Returns True if successful, False if the asset was not found.
+    """
+    item_cl = find_item_chunklist(root, asset_id, big_endian)
+    if item_cl is None:
+        return False
+
+    # Navigate: Item > Pin  > Als2 > alas
+    pin = item_cl.find_optional("Pin ")
+    if pin is None:
+        return False
+    als2 = pin.list.find_optional("Als2")
+    if als2 is None:
+        return False
+    alas = als2.list.find_optional("alas")
+    if alas is None:
+        return False
+
+    # Parse existing JSON and update fullpath
+    alas_data = alas.data
+    if isinstance(alas_data, (bytes, bytearray)):
+        alas_data = alas_data.decode("utf-8", errors="replace")
+
+    try:
+        ref_data = json.loads(alas_data)
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+    ref_data["fullpath"] = new_path
+    new_json = json.dumps(ref_data, ensure_ascii=False, separators=(',', ':'))
+    alas.data = new_json
     return True
 
 
@@ -581,6 +654,193 @@ def set_keyframe_value(root: Chunk, comp_id: int, layer_id: int,
     # ldat.data is bytes — need to make it mutable
     ldat_bytes = bytearray(ldat.data)
     ldat_bytes[start:start + len(packed)] = packed
+    ldat.data = bytes(ldat_bytes)
+    return True
+
+
+def _get_ldat_info(prop_cl, big_endian: bool):
+    """Read tdb4 metadata and ldat from a property ChunkList.
+
+    Returns (components, is_spatial, time_scale, count, item_size, ldat_chunk)
+    or None if not available.
+    """
+    tdb4 = prop_cl.find_optional("tdb4")
+    if tdb4 is None or not isinstance(tdb4.data, (bytes, bytearray)):
+        return None
+    br = BinaryReader(tdb4.data, 0, big_endian)
+    br.skip(2)
+    components = br.read_uint(2)
+    flags2 = br.read_flags(2)
+    is_spatial = flags2.get_bit(1, 3)
+    br.skip(7)
+    time_scale = br.read_uint(4)
+
+    lst = prop_cl.find_optional("list")
+    if lst is None:
+        return None
+    lst_cl = lst.list
+    lhd3 = lst_cl.find_optional("lhd3")
+    ldat = lst_cl.find_optional("ldat")
+    if lhd3 is None or ldat is None:
+        return None
+    if not isinstance(lhd3.data, (bytes, bytearray)):
+        return None
+    if not isinstance(ldat.data, (bytes, bytearray)):
+        return None
+
+    hr = BinaryReader(lhd3.data, 0, big_endian)
+    hr.skip(10)
+    count = hr.read_uint(2)
+    hr.skip(6)
+    item_size = hr.read_uint(2)
+
+    return components, is_spatial, time_scale, count, item_size, ldat
+
+
+def _locate_prop_ldat(root: Chunk, comp_id: int, layer_id: int,
+                      match_name_path: list[str], big_endian: bool):
+    """Navigate to a property's ldat info. Returns (ldat_info, prop_cl) or (None, None)."""
+    comp_cl = find_comp_chunklist(root, comp_id, big_endian)
+    if comp_cl is None:
+        return None, None
+    layer_chunk = find_layer_chunk(comp_cl, layer_id, big_endian)
+    if layer_chunk is None:
+        return None, None
+    tdgp = layer_chunk.list.find_optional("tdgp")
+    if tdgp is None:
+        return None, None
+    prop_chunk = find_property_chunk(tdgp.list, match_name_path)
+    if prop_chunk is None or not _is_chunk_list(prop_chunk.data):
+        return None, None
+    info = _get_ldat_info(prop_chunk.data, big_endian)
+    return info, prop_chunk.data
+
+
+def set_keyframe_time(root: Chunk, comp_id: int, layer_id: int,
+                      match_name_path: list[str], key_index: int,
+                      new_time: float, big_endian: bool) -> bool:
+    """Set a keyframe's time in the ldat chunk.
+
+    Args:
+        key_index: 1-based keyframe index.
+        new_time: New time in seconds.
+
+    Returns True if successful.
+    """
+    info, _ = _locate_prop_ldat(root, comp_id, layer_id, match_name_path, big_endian)
+    if info is None:
+        return False
+    components, is_spatial, time_scale, count, item_size, ldat = info
+
+    idx = key_index - 1
+    if idx < 0 or idx >= count:
+        return False
+
+    # Time is at offset 1 (after 1 skip byte), 4 bytes signed int
+    time_raw = int(round(new_time * time_scale))
+    fmt = ">i" if big_endian else "<i"
+    packed = struct.pack(fmt, time_raw)
+
+    start = idx * item_size + 1  # skip 1 byte
+    ldat_bytes = bytearray(ldat.data)
+    ldat_bytes[start:start + 4] = packed
+    ldat.data = bytes(ldat_bytes)
+    return True
+
+
+def set_keyframe_interpolation(root: Chunk, comp_id: int, layer_id: int,
+                               match_name_path: list[str], key_index: int,
+                               transition_type: int,
+                               big_endian: bool) -> bool:
+    """Set a keyframe's interpolation type in the ldat chunk.
+
+    Args:
+        key_index: 1-based keyframe index.
+        transition_type: 1=linear, 2=bezier, 3=hold.
+
+    Returns True if successful.
+    """
+    info, _ = _locate_prop_ldat(root, comp_id, layer_id, match_name_path, big_endian)
+    if info is None:
+        return False
+    components, is_spatial, time_scale, count, item_size, ldat = info
+
+    idx = key_index - 1
+    if idx < 0 or idx >= count:
+        return False
+
+    # Transition type at offset 5 (1 skip + 4 time), 1 byte
+    start = idx * item_size + 5
+    ldat_bytes = bytearray(ldat.data)
+    ldat_bytes[start] = transition_type & 0xFF
+    ldat.data = bytes(ldat_bytes)
+    return True
+
+
+def set_keyframe_ease(root: Chunk, comp_id: int, layer_id: int,
+                      match_name_path: list[str], key_index: int,
+                      in_speed: list[float] | None, in_influence: list[float] | None,
+                      out_speed: list[float] | None, out_influence: list[float] | None,
+                      big_endian: bool) -> bool:
+    """Set a keyframe's temporal ease (speed/influence) in the ldat chunk.
+
+    Args:
+        key_index: 1-based keyframe index.
+        in_speed, in_influence, out_speed, out_influence: Per-component ease values.
+            Pass None to leave unchanged.
+
+    Returns True if successful.
+    """
+    info, _ = _locate_prop_ldat(root, comp_id, layer_id, match_name_path, big_endian)
+    if info is None:
+        return False
+    components, is_spatial, time_scale, count, item_size, ldat = info
+
+    idx = key_index - 1
+    if idx < 0 or idx >= count:
+        return False
+
+    fmt = ">" if big_endian else "<"
+    ldat_bytes = bytearray(ldat.data)
+    record_start = idx * item_size
+
+    if is_spatial or components == 1:
+        # Scalar / spatial / color: ease at offset 8 + 16 = 24
+        # Layout: [8 header][16 skip][in_speed f64][in_influence f64]
+        #         [out_speed f64][out_influence f64]
+        ease_offset = record_start + 8 + 16
+        if ease_offset + 32 > len(ldat_bytes):
+            return False
+        if in_speed is not None and len(in_speed) >= 1:
+            struct.pack_into(f"{fmt}d", ldat_bytes, ease_offset, in_speed[0])
+        if in_influence is not None and len(in_influence) >= 1:
+            struct.pack_into(f"{fmt}d", ldat_bytes, ease_offset + 8, in_influence[0])
+        if out_speed is not None and len(out_speed) >= 1:
+            struct.pack_into(f"{fmt}d", ldat_bytes, ease_offset + 16, out_speed[0])
+        if out_influence is not None and len(out_influence) >= 1:
+            struct.pack_into(f"{fmt}d", ldat_bytes, ease_offset + 24, out_influence[0])
+    else:
+        # Multi-dimensional (type 3/5): ease is interleaved after value
+        # Layout: [8 header][value: C*8][in_speed: C*8][in_influence: C*8]
+        #         [out_speed: C*8][out_influence: C*8]
+        val_offset = record_start + 8
+        c = components
+        is_off = val_offset + c * 8
+        ii_off = is_off + c * 8
+        os_off = ii_off + c * 8
+        oi_off = os_off + c * 8
+        if oi_off + c * 8 > len(ldat_bytes):
+            return False
+        for i in range(c):
+            if in_speed is not None and i < len(in_speed):
+                struct.pack_into(f"{fmt}d", ldat_bytes, is_off + i * 8, in_speed[i])
+            if in_influence is not None and i < len(in_influence):
+                struct.pack_into(f"{fmt}d", ldat_bytes, ii_off + i * 8, in_influence[i])
+            if out_speed is not None and i < len(out_speed):
+                struct.pack_into(f"{fmt}d", ldat_bytes, os_off + i * 8, out_speed[i])
+            if out_influence is not None and i < len(out_influence):
+                struct.pack_into(f"{fmt}d", ldat_bytes, oi_off + i * 8, out_influence[i])
+
     ldat.data = bytes(ldat_bytes)
     return True
 

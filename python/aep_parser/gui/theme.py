@@ -11,6 +11,8 @@ ROLE_NODE_TYPE = 261  # Qt.UserRole + 5
 ROLE_ASSET_ID = 262   # Qt.UserRole + 6
 ROLE_LAYER_ID = 263   # Qt.UserRole + 7
 ROLE_MATCH_PATH = 264 # Qt.UserRole + 8
+ROLE_KEY_INDEX = 265  # Qt.UserRole + 9  (1-based keyframe index)
+ROLE_KEY_DATA = 266   # Qt.UserRole + 10 (raw keyframe dict)
 
 COLOR_BG = QColor("#1e1e1e")
 COLOR_BG_ALT = QColor("#252526")
