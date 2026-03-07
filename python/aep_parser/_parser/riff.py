@@ -23,6 +23,10 @@ class RiffParser(BinaryReader):
             raise ValueError(f"Unknown format: {header!r} (expected RIFF or RIFX)")
 
         size = self.read_uint(4)
+        # Clamp declared size to actual remaining data
+        available = self.remaining() + 4  # +4 because file_id is part of size
+        if size > available:
+            size = available
         file_id = self.read_id()
         self.on_file_start(file_id)
         chunk_list = self._parse_chunk_list(ChunkList(file_id), size - 4)
@@ -48,6 +52,8 @@ class RiffParser(BinaryReader):
     def _parse_chunk(self) -> Chunk:
         header = self.read_id()
         size = self.read_uint(4)
+        # Clamp to remaining data to survive truncated files
+        size = min(size, self.remaining())
         chunk = self._parse_chunk_data(header, size)
         # RIFF chunks are padded to 2-byte boundaries
         if size % 2 == 1:

@@ -745,7 +745,12 @@ def open_aep(path: str | Path) -> Project:
     """Open a binary .aep file and return a Project wrapper.
 
     Retains the parsed chunk tree so the project can be modified and saved.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is too small or not a valid AEP file.
     """
+    from aep_parser import AepParseError
     from aep_parser._parser import AepChunkParser, ProjectParser
     try:
         from aep_parser._core import parse_riff as _rust_parse_riff
@@ -754,11 +759,19 @@ def open_aep(path: str | Path) -> Project:
         _HAS_RUST = False
 
     p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {p}")
     raw = p.read_bytes()
+
+    if len(raw) < 12:
+        raise ValueError(f"File too small to be a valid AEP file ({len(raw)} bytes): {p}")
 
     # Extract trailing data (XMP metadata) after the RIFX chunk
     import struct as _st
-    _rifx_end = 8 + _st.unpack_from(">I", raw, 4)[0]
+    try:
+        _rifx_end = 8 + _st.unpack_from(">I", raw, 4)[0]
+    except _st.error:
+        raise ValueError(f"Cannot read RIFF header from: {p}")
     trailing = raw[_rifx_end:] if _rifx_end < len(raw) else b""
 
     if _HAS_RUST:
@@ -778,9 +791,19 @@ def open_aep(path: str | Path) -> Project:
 
 
 def open_aepx(path: str | Path) -> Project:
-    """Open an .aepx XML file and return a Project wrapper."""
+    """Open an .aepx XML file and return a Project wrapper.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file cannot be decoded or parsed.
+    """
     p = Path(path)
-    xml_string = p.read_text(encoding="utf-8")
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {p}")
+    try:
+        xml_string = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"Cannot decode AEPX file as UTF-8: {p}: {e}") from e
     model = parse_aepx(xml_string)
     return Project(model, str(p))
 

@@ -117,45 +117,59 @@ impl<'a> Parser<'a> {
     }
 
     #[inline(always)]
-    fn read_u32(&mut self) -> u32 {
-        let b = &self.data[self.offset..self.offset + 4];
-        self.offset += 4;
-        if self.big_endian {
-            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    fn check_bounds(&self, n: usize) -> PyResult<()> {
+        if self.offset + n > self.data.len() {
+            Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Read past end of data: offset {}, requested {} bytes, available {}",
+                self.offset,
+                n,
+                self.data.len() - self.offset
+            )))
         } else {
-            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            Ok(())
         }
     }
 
-    #[inline(always)]
-    fn read_id(&mut self) -> &'a str {
+    fn read_u32(&mut self) -> PyResult<u32> {
+        self.check_bounds(4)?;
+        let b = &self.data[self.offset..self.offset + 4];
+        self.offset += 4;
+        Ok(if self.big_endian {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        })
+    }
+
+    fn read_id(&mut self) -> PyResult<&'a str> {
+        self.check_bounds(4)?;
         let s = &self.data[self.offset..self.offset + 4];
         self.offset += 4;
-        str::from_utf8(s).unwrap_or("????")
+        Ok(str::from_utf8(s).unwrap_or("????"))
     }
 
-    #[inline(always)]
-    fn read_bytes(&mut self, n: usize) -> &'a [u8] {
+    fn read_bytes(&mut self, n: usize) -> PyResult<&'a [u8]> {
+        self.check_bounds(n)?;
         let s = &self.data[self.offset..self.offset + n];
         self.offset += n;
-        s
+        Ok(s)
     }
 
-    fn read_string_utf8(&mut self, n: usize) -> String {
-        let bytes = self.read_bytes(n);
-        String::from_utf8_lossy(bytes).into_owned()
+    fn read_string_utf8(&mut self, n: usize) -> PyResult<String> {
+        let bytes = self.read_bytes(n)?;
+        Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
-    fn read_nul_string_utf8(&mut self, n: usize) -> String {
-        let bytes = self.read_bytes(n);
+    fn read_nul_string_utf8(&mut self, n: usize) -> PyResult<String> {
+        let bytes = self.read_bytes(n)?;
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-        String::from_utf8_lossy(&bytes[..end]).into_owned()
+        Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
     }
 
-    fn read_string_utf16(&mut self, n: usize) -> String {
-        let bytes = self.read_bytes(n);
+    fn read_string_utf16(&mut self, n: usize) -> PyResult<String> {
+        let bytes = self.read_bytes(n)?;
         if bytes.len() < 2 {
-            return String::new();
+            return Ok(String::new());
         }
         let (start, is_le) = if bytes[0] == 0xFF && bytes[1] == 0xFE {
             (2, true)
@@ -175,11 +189,11 @@ impl<'a> Parser<'a> {
                 }
             })
             .collect();
-        String::from_utf16_lossy(&u16s)
+        Ok(String::from_utf16_lossy(&u16s))
     }
 
     fn parse_aep(&mut self, py: Python<'_>) -> PyResult<(Py<Chunk>, bool)> {
-        let header = self.read_id().to_string();
+        let header = self.read_id()?.to_string();
         match header.as_str() {
             "RIFF" => self.big_endian = false,
             "RIFX" => self.big_endian = true,
@@ -190,15 +204,17 @@ impl<'a> Parser<'a> {
                 )))
             }
         }
-        let size = self.read_u32() as usize;
-        let file_id = self.read_id();
+        let size = self.read_u32()? as usize;
+        let file_id = self.read_id()?;
         if file_id != "Egg!" {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid AEP file (expected 'Egg!', got '{}')",
                 file_id
             )));
         }
-        let cl = self.parse_chunk_list(py, file_id, size - 4)?;
+        // Clamp declared size to actual remaining data
+        let content_size = (size - 4).min(self.data.len() - self.offset);
+        let cl = self.parse_chunk_list(py, file_id, content_size)?;
         let big_endian = self.big_endian;
         let chunk = Py::new(
             py,
@@ -233,10 +249,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_chunk(&mut self, py: Python<'_>) -> PyResult<Py<Chunk>> {
-        let header = self.read_id().to_string();
-        let size = self.read_u32() as usize;
+        let header = self.read_id()?.to_string();
+        let raw_size = self.read_u32()? as usize;
+        // Clamp to remaining data to survive truncated files
+        let size = raw_size.min(self.data.len() - self.offset);
         let chunk = self.parse_chunk_data(py, &header, size)?;
-        if size % 2 == 1 {
+        if raw_size % 2 == 1 && self.offset < self.data.len() {
             self.offset += 1;
         }
         Ok(chunk)
@@ -249,11 +267,11 @@ impl<'a> Parser<'a> {
         size: usize,
     ) -> PyResult<Py<Chunk>> {
         if header == "LIST" {
-            let list_type = self.read_id().to_string();
+            let list_type = self.read_id()?.to_string();
 
             // btdk: read as raw bytes (COS text data)
             if list_type == "btdk" {
-                let raw = self.read_bytes(size - 4);
+                let raw = self.read_bytes(size - 4)?;
                 return Py::new(
                     py,
                     Chunk {
@@ -277,7 +295,7 @@ impl<'a> Parser<'a> {
 
         match header {
             "Utf8" | "alas" => {
-                let s = self.read_string_utf8(size);
+                let s = self.read_string_utf8(size)?;
                 Py::new(
                     py,
                     Chunk {
@@ -288,7 +306,7 @@ impl<'a> Parser<'a> {
                 )
             }
             "tdmn" => {
-                let s = self.read_nul_string_utf8(size);
+                let s = self.read_nul_string_utf8(size)?;
                 Py::new(
                     py,
                     Chunk {
@@ -299,7 +317,7 @@ impl<'a> Parser<'a> {
                 )
             }
             "wsnm" => {
-                let s = self.read_string_utf16(size);
+                let s = self.read_string_utf16(size)?;
                 Py::new(
                     py,
                     Chunk {
@@ -321,7 +339,7 @@ impl<'a> Parser<'a> {
                 )
             }
             _ => {
-                let raw = self.read_bytes(size);
+                let raw = self.read_bytes(size)?;
                 Py::new(
                     py,
                     Chunk {

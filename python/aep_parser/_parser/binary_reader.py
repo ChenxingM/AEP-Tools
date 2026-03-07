@@ -12,6 +12,8 @@ class BitFlags:
         self._data = data
 
     def get_bit(self, byte_index: int, bit_index: int) -> bool:
+        if byte_index >= len(self._data):
+            return False
         return (self._data[byte_index] & (1 << bit_index)) != 0
 
 
@@ -36,8 +38,14 @@ class BinaryReader:
         return ">" if self.big_endian else "<"
 
     def read_bytes(self, n: int) -> bytes:
-        result = bytes(self._data[self.offset:self.offset + n])
-        self.offset += n
+        end = self.offset + n
+        if end > len(self._data):
+            raise ValueError(
+                f"Read past end of data: offset {self.offset}, "
+                f"requested {n} bytes, available {len(self._data) - self.offset}"
+            )
+        result = bytes(self._data[self.offset:end])
+        self.offset = end
         return result
 
     def read_uint(self, n: int) -> int:
@@ -88,6 +96,11 @@ class BinaryReader:
         return [read_fn() for _ in range(count)]
 
     def skip(self, n: int) -> None:
+        if self.offset + n > len(self._data):
+            raise ValueError(
+                f"Skip past end of data: offset {self.offset}, "
+                f"requested {n} bytes, available {len(self._data) - self.offset}"
+            )
         self.offset += n
 
     def remaining(self) -> int:

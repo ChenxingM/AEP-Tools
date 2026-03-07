@@ -181,6 +181,9 @@ class PropertyParserMixin:
         tdsb, tdb4, cdat, lst, utf8, tdpi, tdps, tdli = cl.find_multiple(
             ["tdsb", "tdb4", "cdat", "list", "Utf8", "tdpi", "tdps", "tdli"])
 
+        if tdsb is None or tdb4 is None:
+            return prop
+
         fl = self._chunk_reader(tdsb).read_flags(4)
         prop.split = fl.get_bit(3, 1)
 
@@ -365,6 +368,8 @@ class PropertyParserMixin:
 
     def _parse_animated_shape(self, cl: ChunkList) -> AnimatedProperty:
         omks, tdbs = cl.find_multiple(["omks", "tdbs"])
+        if omks is None or tdbs is None:
+            return AnimatedProperty()
         max_verts = 0
         shapes = []
         for shap in omks.list.find_all("shap"):
@@ -380,7 +385,9 @@ class PropertyParserMixin:
 
     def _parse_bezier(self, cl: ChunkList) -> BezierShape:
         shape = BezierShape()
-        shph = cl.find("shph")
+        shph = cl.find_optional("shph")
+        if shph is None:
+            return shape
         r = self._chunk_reader(shph)
         r.skip(3)
         fl = r.read_flags(1)
@@ -390,7 +397,9 @@ class PropertyParserMixin:
         shape.maximum.x = r.read_float32()
         shape.maximum.y = r.read_float32()
 
-        list_chunk = cl.find("list")
+        list_chunk = cl.find_optional("list")
+        if list_chunk is None:
+            return shape
         for item_reader in self._list_values(list_chunk):
             x = item_reader.read_float32()
             y = item_reader.read_float32()
@@ -401,13 +410,18 @@ class PropertyParserMixin:
 
     def _parse_animated_gradient(self, cl: ChunkList) -> AnimatedProperty:
         gcky, tdbs = cl.find_multiple(["GCky", "tdbs"])
+        if gcky is None or tdbs is None:
+            return AnimatedProperty()
         gradients = []
         for utf8 in gcky.list.find_all("Utf8"):
             gradients.append(self._parse_gradient(utf8.data))
         return self._parse_animated_property(tdbs.list, gradients)
 
     def _parse_gradient(self, xml_str: str) -> Gradient:
-        root = ET.fromstring(xml_str)
+        try:
+            root = ET.fromstring(xml_str)
+        except ET.ParseError:
+            return Gradient()
         data = self._parse_ae_prop_xml(root)
         grad_data = data.get("Gradient Color Data", {})
         gradient = Gradient()
@@ -460,6 +474,8 @@ class PropertyParserMixin:
 
     def _parse_animated_orientation(self, cl: ChunkList) -> AnimatedProperty:
         otky, tdbs = cl.find_multiple(["otky", "tdbs"])
+        if otky is None or tdbs is None:
+            return AnimatedProperty()
         orientations = []
         for otda in otky.list.find_all("otda"):
             r = self._chunk_reader(otda)
@@ -469,6 +485,8 @@ class PropertyParserMixin:
 
     def _parse_animated_marker(self, cl: ChunkList) -> AnimatedProperty:
         mrky, tdbs = cl.find_multiple(["mrky", "tdbs"])
+        if mrky is None or tdbs is None:
+            return AnimatedProperty()
         markers = []
         for nmrd in mrky.list.find_all("Nmrd"):
             markers.append(self._parse_marker(nmrd))
@@ -477,7 +495,9 @@ class PropertyParserMixin:
     def _parse_marker(self, chunk: Chunk) -> Marker:
         marker = Marker()
         cl = chunk.list
-        nmhd = cl.find("NmHd")
+        nmhd = cl.find_optional("NmHd")
+        if nmhd is None:
+            return marker
         r = self._chunk_reader(nmhd)
         utf8 = cl.find_optional("Utf8")
         marker.name = self._utf8_name(utf8)
@@ -493,6 +513,8 @@ class PropertyParserMixin:
 
     def _parse_animated_text(self, cl: ChunkList) -> TextProperty:
         btdk, tdbs = cl.find_multiple(["btdk", "tdbs"])
+        if btdk is None or tdbs is None:
+            return TextProperty()
         cos_data = CosParser(btdk.data).parse()
 
         text_prop = TextProperty()

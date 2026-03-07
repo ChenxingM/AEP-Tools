@@ -391,7 +391,13 @@ class ProjectParser(PropertyParserMixin, EffectParserMixin):
         else:
             if als2 is None:
                 return None
-            ref_data = json.loads(als2.list.find("alas").data)
+            alas = als2.list.find_optional("alas")
+            if alas is None:
+                return None
+            try:
+                ref_data = json.loads(alas.data)
+            except (json.JSONDecodeError, TypeError):
+                return None
             if not name:
                 name = ref_data.get("fullpath", "").replace("\\", "/").split("/")[-1]
             full_path = ref_data.get("fullpath", "")
@@ -449,7 +455,9 @@ class ProjectParser(PropertyParserMixin, EffectParserMixin):
             196-199: motion_blur_adaptive_sample_limit (s4be)
             200-203: motion_blur_samples_per_frame (s4be)
         """
-        cdta = cl.find("cdta")
+        cdta = cl.find_optional("cdta")
+        if cdta is None:
+            return
         d = cdta.data
         if not isinstance(d, (bytes, bytearray)):
             return
