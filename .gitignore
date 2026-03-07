@@ -8,8 +8,12 @@ build/
 *.egg
 .eggs/
 
-# Rust
+# Rust / C extensions
 target/
+*.so
+*.pyd
+*.pdb
+*.dll
 
 # Virtual environments
 .venv/

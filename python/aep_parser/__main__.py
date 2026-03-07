@@ -6,7 +6,7 @@ Usage:
     aep-parser input.aep -o output.json  -> writes JSON to file
     aep-parser input.aepx                -> auto-detects format by extension
     aep-parser input.aep --compact       -> compact JSON output
-    aep-parser input.aep --getversion    -> print AE version info only
+    aep-parser input.aep --version       -> print AE version info only
     python -m aep_parser input.aep       -> same as above
 """
 
@@ -66,7 +66,7 @@ def main() -> None:
     parser.add_argument("--comp", help="Export only the composition with this name")
     parser.add_argument("--comp-id", type=int,
                         help="Export only the composition with this ID")
-    parser.add_argument("--getversion", action="store_true",
+    parser.add_argument("-V", "--version", action="store_true", dest="show_version",
                         help="Print AE version info only (fast, no full parse)")
     args = parser.parse_args()
 
@@ -76,7 +76,7 @@ def main() -> None:
         sys.exit(1)
 
     # Fast version-only mode
-    if args.getversion:
+    if args.show_version:
         if input_path.suffix.lower() == ".aepx":
             print("Version detection not supported for .aepx files", file=sys.stderr)
             sys.exit(1)

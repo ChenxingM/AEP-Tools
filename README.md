@@ -48,7 +48,7 @@ pytest
 
 ## Usage
 
-### Python API (aep_tools)
+### Python Module (aep_tools)
 
 ```python
 from aep_tools import Project

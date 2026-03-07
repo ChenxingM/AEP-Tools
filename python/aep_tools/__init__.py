@@ -32,6 +32,8 @@ from ._property import (
     TextSourceProperty,
 )
 
+__version__ = "0.1.0"
+
 __all__ = [
     # Project
     "Project",
