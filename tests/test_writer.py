@@ -18,10 +18,26 @@ from aep_tools._writer import (
     set_layer_track_matte,
     set_layer_quality,
     set_layer_time_field,
+    set_layer_preserve_transparency,
+    set_layer_light_type,
     set_comp_dimensions,
     set_comp_bgcolor,
     set_comp_framerate,
     set_comp_duration,
+    set_comp_work_area_start,
+    set_comp_work_area_end,
+    set_comp_flag,
+    set_comp_shutter_angle,
+    set_comp_shutter_phase,
+    set_comp_motion_blur_samples,
+    set_comp_pixel_aspect,
+    set_comp_display_start_time,
+    set_comp_drop_frame,
+    set_project_bits_per_channel,
+    set_project_linearize_working_space,
+    set_project_audio_sample_rate,
+    set_project_working_gamma,
+    set_project_compensate_scene_referred,
 )
 
 
@@ -62,7 +78,7 @@ def _make_ldta(layer_id: int, big_endian: bool = True) -> bytes:
         112+: padding to 136 bytes total
     """
     fmt = ">" if big_endian else "<"
-    buf = bytearray(136)
+    buf = bytearray(140)
     struct.pack_into(f"{fmt}I", buf, 0, layer_id)    # id
     struct.pack_into(f"{fmt}H", buf, 4, 2)           # quality = BEST
     struct.pack_into(f"{fmt}i", buf, 8, 1)           # stretch_num = 1
@@ -74,7 +90,9 @@ def _make_ldta(layer_id: int, big_endian: bool = True) -> bytes:
     struct.pack_into(f"{fmt}I", buf, 32, 30)         # out_den = 30
     buf[39] = 0x01                                    # flags: visible=True
     struct.pack_into(f"{fmt}I", buf, 96, 1)          # blend_mode = Normal
+    buf[103] = 0                                      # preserve_transparency = False
     struct.pack_into(f"{fmt}H", buf, 110, 1)         # stretch_den = 1
+    buf[139] = 2                                      # light_type = Point
     return bytes(buf)
 
 
@@ -149,17 +167,29 @@ def _build_test_chunk_tree(big_endian: bool = True) -> Chunk:
     layr_cl = ChunkList("Layr", [ldta, utf8_name, root_tdgp])
     layr = Chunk("LIST", 0, layr_cl)
 
-    # Comp data (cdta with proper layout)
-    cdta_buf = bytearray(144)
+    # Comp data (cdta with proper layout — 204 bytes, per Kaitai spec)
+    cdta_buf = bytearray(204)
     fmt = ">" if big_endian else "<"
-    struct.pack_into(f"{fmt}I", cdta_buf, 4, 1)      # time_denom = 1
-    struct.pack_into(f"{fmt}I", cdta_buf, 8, 30)     # time_num = 30 → 30fps
-    struct.pack_into(f"{fmt}H", cdta_buf, 45, 150)   # duration raw = 150
-    struct.pack_into(f"{fmt}H", cdta_buf, 49, 30)    # dur_div = 30
-    cdta_buf[52] = 51                                  # color R
-    cdta_buf[53] = 51                                  # color G
-    cdta_buf[54] = 51                                  # color B
+    # Work area in point (u4 dividend/divisor) at offset 28/32
+    struct.pack_into(f"{fmt}II", cdta_buf, 28, 0, 600)       # in_point = 0s
+    # Work area out point (u4 dividend/divisor) at offset 36/40
+    struct.pack_into(f"{fmt}II", cdta_buf, 36, 3000, 600)    # out_point = 5.0s
+    # Duration (u4 dividend/divisor) at offset 44/48
+    struct.pack_into(f"{fmt}II", cdta_buf, 44, 3000, 600)    # duration = 5.0s
+    cdta_buf[52] = 51                                          # color R
+    cdta_buf[53] = 51                                          # color G
+    cdta_buf[54] = 51                                          # color B
+    cdta_buf[138] = 0                                          # comp flags byte 0
+    cdta_buf[139] = 0                                          # comp flags byte 1
     struct.pack_into(f"{fmt}HH", cdta_buf, 140, 1920, 1080)  # width, height
+    struct.pack_into(f"{fmt}II", cdta_buf, 144, 10000, 10000) # pixel aspect 1:1
+    # Frame rate (u2 integer + u2 fractional) at offset 156/158
+    struct.pack_into(f"{fmt}HH", cdta_buf, 156, 30, 0)       # 30fps
+    struct.pack_into(f"{fmt}iI", cdta_buf, 164, 0, 30)       # display_start = 0s
+    struct.pack_into(f"{fmt}H", cdta_buf, 174, 180)           # shutter_angle = 180
+    struct.pack_into(f"{fmt}i", cdta_buf, 180, -90)           # shutter_phase = -90
+    struct.pack_into(f"{fmt}i", cdta_buf, 196, 128)           # mb adaptive_limit
+    struct.pack_into(f"{fmt}i", cdta_buf, 200, 16)            # mb samples_per_frame
     cdta = Chunk("cdta", len(cdta_buf), bytes(cdta_buf))
 
     # Item (composition)
@@ -171,8 +201,20 @@ def _build_test_chunk_tree(big_endian: bool = True) -> Chunk:
     fold_cl = ChunkList("Fold", [item])
     fold = Chunk("LIST", 0, fold_cl)
 
+    # Project-level chunks
+    nnhd_buf = bytearray(40)
+    nnhd_buf[24] = 0  # bits_per_channel = 8bpc (code 0)
+    nnhd_buf[31] = 0  # linearize bit not set
+    nnhd = Chunk("nnhd", 40, bytes(nnhd_buf))
+
+    adfr_buf = struct.pack(">d", 48000.0)  # audio sample rate
+    adfr = Chunk("adfr", 8, adfr_buf)
+
+    dwga = Chunk("dwga", 1, bytes([0]))    # working gamma = 2.2
+    acer = Chunk("acer", 1, bytes([0]))    # compensate scene-referred = false
+
     # Root
-    root_cl = ChunkList("Egg!", [fold])
+    root_cl = ChunkList("Egg!", [fold, nnhd, adfr, dwga, acer])
     root = Chunk("RIFX" if big_endian else "RIFF", 0, root_cl)
 
     return root
@@ -724,21 +766,27 @@ class TestCompFields:
         assert set_comp_framerate(root, 100, 60.0, True)
         comp_cl = find_comp_chunklist(root, 100, True)
         cdta = comp_cl.find_optional("cdta")
-        denom = struct.unpack(">I", cdta.data[4:8])[0]
-        num = struct.unpack(">I", cdta.data[8:12])[0]
-        assert num / denom == pytest.approx(60.0)
+        fr_int = struct.unpack(">H", cdta.data[156:158])[0]
+        fr_frac = struct.unpack(">H", cdta.data[158:160])[0]
+        assert fr_int + fr_frac / 65536.0 == pytest.approx(60.0)
+
+    def test_set_framerate_fractional(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_framerate(root, 100, 29.97, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        fr_int = struct.unpack(">H", cdta.data[156:158])[0]
+        fr_frac = struct.unpack(">H", cdta.data[158:160])[0]
+        assert fr_int + fr_frac / 65536.0 == pytest.approx(29.97, abs=0.001)
 
     def test_set_duration(self):
         root = _build_test_chunk_tree()
         assert set_comp_duration(root, 100, 10.0, True)
         comp_cl = find_comp_chunklist(root, 100, True)
         cdta = comp_cl.find_optional("cdta")
-        raw = struct.unpack(">H", cdta.data[45:47])[0]
-        dur_div = struct.unpack(">H", cdta.data[49:51])[0]
-        denom = struct.unpack(">I", cdta.data[4:8])[0]
-        num = struct.unpack(">I", cdta.data[8:12])[0]
-        framerate = num / denom
-        assert raw * framerate / dur_div == pytest.approx(10.0)
+        dividend = struct.unpack(">I", cdta.data[44:48])[0]
+        divisor = struct.unpack(">I", cdta.data[48:52])[0]
+        assert dividend / divisor == pytest.approx(10.0)
 
     def test_nonexistent_comp(self):
         root = _build_test_chunk_tree()
@@ -913,3 +961,302 @@ class TestCompPropertySetters:
         assert cdta.data[52] == 255
         assert cdta.data[53] == 128
         assert cdta.data[54] == 0
+
+
+# Tests: Layer preserve transparency and light type
+
+
+class TestLayerPreserveTransparency:
+    def test_set_true(self):
+        root = _build_test_chunk_tree()
+        assert set_layer_preserve_transparency(root, 100, 10, True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        ldta = find_layer_chunk(comp_cl, 10, True).list.find_optional("ldta")
+        assert ldta.data[103] == 1
+
+    def test_set_false(self):
+        root = _build_test_chunk_tree()
+        set_layer_preserve_transparency(root, 100, 10, True, True)
+        set_layer_preserve_transparency(root, 100, 10, False, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        ldta = find_layer_chunk(comp_cl, 10, True).list.find_optional("ldta")
+        assert ldta.data[103] == 0
+
+    def test_nonexistent_layer(self):
+        root = _build_test_chunk_tree()
+        assert not set_layer_preserve_transparency(root, 100, 999, True, True)
+
+
+class TestLayerLightType:
+    def test_set_parallel(self):
+        root = _build_test_chunk_tree()
+        assert set_layer_light_type(root, 100, 10, 0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        ldta = find_layer_chunk(comp_cl, 10, True).list.find_optional("ldta")
+        assert ldta.data[139] == 0
+
+    def test_set_spot(self):
+        root = _build_test_chunk_tree()
+        assert set_layer_light_type(root, 100, 10, 1, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        ldta = find_layer_chunk(comp_cl, 10, True).list.find_optional("ldta")
+        assert ldta.data[139] == 1
+
+    def test_set_ambient(self):
+        root = _build_test_chunk_tree()
+        assert set_layer_light_type(root, 100, 10, 3, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        ldta = find_layer_chunk(comp_cl, 10, True).list.find_optional("ldta")
+        assert ldta.data[139] == 3
+
+    def test_nonexistent_layer(self):
+        root = _build_test_chunk_tree()
+        assert not set_layer_light_type(root, 100, 999, 1, True)
+
+
+# Tests: Comp work area, flags, shutter, motion blur, pixel aspect, etc.
+
+
+class TestCompWorkArea:
+    def test_set_work_area_start(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_work_area_start(root, 100, 2.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        dividend = struct.unpack(">I", cdta.data[28:32])[0]
+        divisor = struct.unpack(">I", cdta.data[32:36])[0]
+        assert dividend / divisor == pytest.approx(2.0)
+
+    def test_set_work_area_end(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_work_area_end(root, 100, 8.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        dividend = struct.unpack(">I", cdta.data[36:40])[0]
+        divisor = struct.unpack_from(">I", cdta.data, 40)[0]
+        assert dividend / divisor == pytest.approx(8.0)
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_work_area_start(root, 999, 1.0, True)
+        assert not set_comp_work_area_end(root, 999, 5.0, True)
+
+
+class TestCompFlagSettings:
+    def test_set_motion_blur(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_flag(root, 100, 'motion_blur', True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert cdta.data[139] & (1 << 3) != 0
+
+    def test_clear_motion_blur(self):
+        root = _build_test_chunk_tree()
+        set_comp_flag(root, 100, 'motion_blur', True, True)
+        set_comp_flag(root, 100, 'motion_blur', False, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert cdta.data[139] & (1 << 3) == 0
+
+    def test_set_draft3d(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_flag(root, 100, 'draft3d', True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert cdta.data[138] & (1 << 7) != 0
+
+    def test_set_hide_shy_layers(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_flag(root, 100, 'hide_shy_layers', True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert cdta.data[139] & (1 << 0) != 0
+
+    def test_set_frame_blending(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_flag(root, 100, 'frame_blending', True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert cdta.data[139] & (1 << 4) != 0
+
+    def test_invalid_flag(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_flag(root, 100, 'nonexistent', True, True)
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_flag(root, 999, 'motion_blur', True, True)
+
+
+class TestCompShutter:
+    def test_set_shutter_angle(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_shutter_angle(root, 100, 360, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert struct.unpack(">H", cdta.data[174:176])[0] == 360
+
+    def test_set_shutter_phase(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_shutter_phase(root, 100, -180, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        assert struct.unpack(">i", cdta.data[180:184])[0] == -180
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_shutter_angle(root, 999, 180, True)
+        assert not set_comp_shutter_phase(root, 999, 0, True)
+
+
+class TestCompMotionBlurSamples:
+    def test_set_samples(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_motion_blur_samples(root, 100, 32, 256, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        adaptive = struct.unpack(">i", cdta.data[196:200])[0]
+        samples = struct.unpack(">i", cdta.data[200:204])[0]
+        assert adaptive == 256
+        assert samples == 32
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_motion_blur_samples(root, 999, 16, 128, True)
+
+
+class TestCompPixelAspect:
+    def test_set_pixel_aspect(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_pixel_aspect(root, 100, 2.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        pw, ph = struct.unpack(">II", cdta.data[144:152])
+        assert pw / ph == pytest.approx(2.0)
+
+    def test_set_square_pixels(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_pixel_aspect(root, 100, 1.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        pw, ph = struct.unpack(">II", cdta.data[144:152])
+        assert pw / ph == pytest.approx(1.0)
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_pixel_aspect(root, 999, 1.0, True)
+
+
+class TestCompDisplayStartTime:
+    def test_set_display_start(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_display_start_time(root, 100, 3.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        dividend = struct.unpack(">i", cdta.data[164:168])[0]
+        divisor = struct.unpack(">I", cdta.data[168:172])[0]
+        assert dividend / divisor == pytest.approx(3.0)
+
+    def test_set_zero(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_display_start_time(root, 100, 0.0, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdta = comp_cl.find_optional("cdta")
+        dividend = struct.unpack(">i", cdta.data[164:168])[0]
+        assert dividend == 0
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_display_start_time(root, 999, 1.0, True)
+
+
+class TestCompDropFrame:
+    def test_set_drop_frame_true(self):
+        root = _build_test_chunk_tree()
+        assert set_comp_drop_frame(root, 100, True, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdrp = comp_cl.find_optional("cdrp")
+        assert cdrp is not None
+        assert cdrp.data[0] == 1
+
+    def test_set_drop_frame_false(self):
+        root = _build_test_chunk_tree()
+        set_comp_drop_frame(root, 100, True, True)
+        set_comp_drop_frame(root, 100, False, True)
+        comp_cl = find_comp_chunklist(root, 100, True)
+        cdrp = comp_cl.find_optional("cdrp")
+        assert cdrp.data[0] == 0
+
+    def test_nonexistent_comp(self):
+        root = _build_test_chunk_tree()
+        assert not set_comp_drop_frame(root, 999, True, True)
+
+
+# Tests: Project-level settings
+
+
+class TestProjectSettings:
+    def test_set_bits_per_channel_16(self):
+        root = _build_test_chunk_tree()
+        assert set_project_bits_per_channel(root, 16, True)
+        nnhd = root.list.find_optional("nnhd")
+        assert nnhd.data[24] == 1  # 16bpc → code 1
+
+    def test_set_bits_per_channel_32(self):
+        root = _build_test_chunk_tree()
+        assert set_project_bits_per_channel(root, 32, True)
+        nnhd = root.list.find_optional("nnhd")
+        assert nnhd.data[24] == 2  # 32bpc → code 2
+
+    def test_set_bits_per_channel_8(self):
+        root = _build_test_chunk_tree()
+        set_project_bits_per_channel(root, 32, True)
+        set_project_bits_per_channel(root, 8, True)
+        nnhd = root.list.find_optional("nnhd")
+        assert nnhd.data[24] == 0  # 8bpc → code 0
+
+    def test_linearize_working_space_on(self):
+        root = _build_test_chunk_tree()
+        assert set_project_linearize_working_space(root, True, True)
+        nnhd = root.list.find_optional("nnhd")
+        assert nnhd.data[31] & (1 << 5) != 0
+
+    def test_linearize_working_space_off(self):
+        root = _build_test_chunk_tree()
+        set_project_linearize_working_space(root, True, True)
+        set_project_linearize_working_space(root, False, True)
+        nnhd = root.list.find_optional("nnhd")
+        assert nnhd.data[31] & (1 << 5) == 0
+
+    def test_audio_sample_rate(self):
+        root = _build_test_chunk_tree()
+        assert set_project_audio_sample_rate(root, 44100.0, True)
+        adfr = root.list.find_optional("adfr")
+        rate = struct.unpack(">d", adfr.data[:8])[0]
+        assert rate == pytest.approx(44100.0)
+
+    def test_working_gamma_2_4(self):
+        root = _build_test_chunk_tree()
+        assert set_project_working_gamma(root, 2.4, True)
+        dwga = root.list.find_optional("dwga")
+        assert dwga.data[0] == 1  # 2.4 → code 1
+
+    def test_working_gamma_2_2(self):
+        root = _build_test_chunk_tree()
+        set_project_working_gamma(root, 2.4, True)
+        set_project_working_gamma(root, 2.2, True)
+        dwga = root.list.find_optional("dwga")
+        assert dwga.data[0] == 0  # 2.2 → code 0
+
+    def test_compensate_scene_referred_on(self):
+        root = _build_test_chunk_tree()
+        assert set_project_compensate_scene_referred(root, True, True)
+        acer = root.list.find_optional("acer")
+        assert acer.data[0] == 1
+
+    def test_compensate_scene_referred_off(self):
+        root = _build_test_chunk_tree()
+        set_project_compensate_scene_referred(root, True, True)
+        set_project_compensate_scene_referred(root, False, True)
+        acer = root.list.find_optional("acer")
+        assert acer.data[0] == 0
