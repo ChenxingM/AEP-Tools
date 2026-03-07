@@ -66,9 +66,15 @@ _TDB4_SPATIAL_3 = bytes(_TDB4_SPATIAL_3)
 _PROPERTY_TEMPLATES: dict[str, tuple[int, bool, bytes, float, float]] = {
     "ADBE Opacity":      (1, False, _TDB4_SCALAR_1, 0.0, 100.0),
     "ADBE Rotate Z":     (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Rotate X":     (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Rotate Y":     (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
     "ADBE Scale":        (3, False, _TDB4_SCALAR_3, 0.0, 0.0),
     "ADBE Anchor Point": (3, True,  _TDB4_SPATIAL_3, 0.0, 0.0),
     "ADBE Position":     (2, True,  _TDB4_SPATIAL_2, 0.0, 0.0),
+    "ADBE Position_0":   (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Position_1":   (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Position_2":   (1, False, _TDB4_SCALAR_1, 0.0, 0.0),
+    "ADBE Orientation":  (3, False, _TDB4_SCALAR_3, 0.0, 0.0),
 }
 
 
@@ -887,6 +893,8 @@ def set_keyframe_ease(root: Chunk, comp_id: int, layer_id: int,
 # Flag name → (byte_index within 4-byte flags field, bit_index)
 _FLAG_MAP: dict[str, tuple[int, int]] = {
     'is_guide':               (1, 1),
+    'frame_blending_type':    (1, 2),
+    'environment_layer':      (1, 5),
     'bicubic_sampling':       (1, 6),
     'auto_orient':            (2, 0),
     'is_adjustment':          (2, 1),
@@ -894,11 +902,14 @@ _FLAG_MAP: dict[str, tuple[int, int]] = {
     'solo':                   (2, 3),
     'is_null':                (2, 7),
     'visible':                (3, 0),
+    'audio_enabled':          (3, 1),
     'effects_enabled':        (3, 2),
     'motion_blur_enabled':    (3, 3),
+    'frame_blending':         (3, 4),
     'locked':                 (3, 5),
     'shy':                    (3, 6),
     'continuously_rasterize': (3, 7),
+    'collapse_transformation': (3, 7),
 }
 
 _LDTA_FLAGS_OFF = 36
@@ -986,6 +997,30 @@ def set_layer_quality(root: Chunk, comp_id: int, layer_id: int,
     fmt = ">H" if big_endian else "<H"
     data = bytearray(ldta.data)
     struct.pack_into(fmt, data, 4, int(quality))
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_preserve_transparency(root: Chunk, comp_id: int, layer_id: int,
+                                     value: bool, big_endian: bool) -> bool:
+    """Set a layer's preserve transparency flag (uint8 at ldta offset 103)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    data = bytearray(ldta.data)
+    data[103] = 1 if value else 0
+    ldta.data = bytes(data)
+    return True
+
+
+def set_layer_light_type(root: Chunk, comp_id: int, layer_id: int,
+                          light_type: int, big_endian: bool) -> bool:
+    """Set a layer's light type (uint8 at ldta offset 139)."""
+    ldta = _find_ldta(root, comp_id, layer_id, big_endian)
+    if ldta is None:
+        return False
+    data = bytearray(ldta.data)
+    data[139] = light_type & 0xFF
     ldta.data = bytes(data)
     return True
 
@@ -1104,6 +1139,253 @@ def set_comp_duration(root: Chunk, comp_id: int, duration: float,
     new_raw = int(round(duration * raw_dur_div / framerate))
     struct.pack_into(f"{fmt}H", data, 45, new_raw)
     cdta.data = bytes(data)
+    return True
+
+
+def _ensure_cdta_time_div(data: bytearray, fmt: str, num_off: int,
+                          div_off: int, framerate: float) -> int:
+    """Ensure the divisor for a cdta time field has enough precision.
+
+    When AE stores a default time value (e.g. work area start = 0), the raw
+    divisor can be very small (e.g. 2). This makes it impossible to encode
+    non-zero values accurately. In that case, borrow the divisor from the
+    duration field (offset 49) which always has reasonable precision, or fall
+    back to ``int(round(4 * framerate))``.
+    """
+    raw_div = struct.unpack_from(f"{fmt}H", data, div_off)[0]
+    if raw_div >= int(round(framerate)):
+        return raw_div
+    dur_div = struct.unpack_from(f"{fmt}H", data, 49)[0]
+    new_div = dur_div if dur_div >= int(round(framerate)) else int(round(4 * framerate))
+    # Rescale existing numerator to match the new divisor
+    old_num = struct.unpack_from(f"{fmt}H", data, num_off)[0]
+    if raw_div > 0 and old_num > 0 and old_num < 65535:
+        rescaled = min(int(round(old_num * new_div / raw_div)), 65534)
+        struct.pack_into(f"{fmt}H", data, num_off, rescaled)
+    struct.pack_into(f"{fmt}H", data, div_off, new_div)
+    return new_div
+
+
+def set_comp_work_area_start(root: Chunk, comp_id: int, start: float,
+                              big_endian: bool) -> bool:
+    """Set composition work area start time (cdta offset 29/33, rational)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    time_denom = struct.unpack_from(f"{fmt}I", data, 4)[0]
+    time_num = struct.unpack_from(f"{fmt}I", data, 8)[0]
+    framerate = time_num / time_denom if time_denom else 30.0
+    if framerate == 0:
+        return False
+    raw_div = _ensure_cdta_time_div(data, fmt, 29, 33, framerate)
+    new_num = int(round(start * raw_div / framerate))
+    struct.pack_into(f"{fmt}H", data, 29, new_num)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_work_area_end(root: Chunk, comp_id: int, end: float,
+                            big_endian: bool) -> bool:
+    """Set composition work area end time (cdta offset 37/41, rational)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    time_denom = struct.unpack_from(f"{fmt}I", data, 4)[0]
+    time_num = struct.unpack_from(f"{fmt}I", data, 8)[0]
+    framerate = time_num / time_denom if time_denom else 30.0
+    if framerate == 0:
+        return False
+    raw_div = _ensure_cdta_time_div(data, fmt, 37, 41, framerate)
+    new_num = int(round(end * raw_div / framerate))
+    struct.pack_into(f"{fmt}H", data, 37, new_num)
+    cdta.data = bytes(data)
+    return True
+
+
+# Comp flags in cdta (offset → bit position)
+_COMP_FLAG_MAP: dict[str, tuple[int, int]] = {
+    'draft3d':                     (138, 7),
+    'preserve_nested_resolution':  (139, 7),
+    'preserve_nested_frame_rate':  (139, 5),
+    'frame_blending':              (139, 4),
+    'motion_blur':                 (139, 3),
+    'hide_shy_layers':             (139, 0),
+}
+
+
+def set_comp_flag(root: Chunk, comp_id: int, flag_name: str, value: bool,
+                   big_endian: bool) -> bool:
+    """Set a boolean flag in the cdta chunk."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    mapping = _COMP_FLAG_MAP.get(flag_name)
+    if mapping is None:
+        return False
+    offset, bit = mapping
+    data = bytearray(cdta.data)
+    if value:
+        data[offset] |= (1 << bit)
+    else:
+        data[offset] &= ~(1 << bit)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_shutter_angle(root: Chunk, comp_id: int, angle: int,
+                            big_endian: bool) -> bool:
+    """Set composition shutter angle (uint16 at cdta offset 174)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    struct.pack_into(f"{fmt}H", data, 174, int(angle))
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_shutter_phase(root: Chunk, comp_id: int, phase: int,
+                            big_endian: bool) -> bool:
+    """Set composition shutter phase (sint32 at cdta offset 180)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    struct.pack_into(f"{fmt}i", data, 180, int(phase))
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_motion_blur_samples(root: Chunk, comp_id: int,
+                                  samples_per_frame: int,
+                                  adaptive_limit: int,
+                                  big_endian: bool) -> bool:
+    """Set composition motion blur sample counts (sint32 at cdta offset 196/200)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    struct.pack_into(f"{fmt}i", data, 196, int(adaptive_limit))
+    struct.pack_into(f"{fmt}i", data, 200, int(samples_per_frame))
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_pixel_aspect(root: Chunk, comp_id: int, ratio: float,
+                           big_endian: bool) -> bool:
+    """Set composition pixel aspect ratio (uint32 pair at cdta offset 144-151)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    pixel_h = 10000
+    pixel_w = int(round(ratio * pixel_h))
+    struct.pack_into(f"{fmt}II", data, 144, pixel_w, pixel_h)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_display_start_time(root: Chunk, comp_id: int, time: float,
+                                 big_endian: bool) -> bool:
+    """Set composition display start time (rational at cdta offset 164-171)."""
+    cdta = _find_cdta(root, comp_id, big_endian)
+    if cdta is None:
+        return False
+    fmt = ">" if big_endian else "<"
+    data = bytearray(cdta.data)
+    divisor = struct.unpack_from(f"{fmt}I", data, 168)[0]
+    if divisor == 0:
+        divisor = 1
+    dividend = int(round(time * divisor))
+    struct.pack_into(f"{fmt}i", data, 164, dividend)
+    cdta.data = bytes(data)
+    return True
+
+
+def set_comp_drop_frame(root: Chunk, comp_id: int, drop_frame: bool,
+                         big_endian: bool) -> bool:
+    """Set composition drop frame flag (cdrp chunk)."""
+    comp_cl = find_comp_chunklist(root, comp_id, big_endian)
+    if comp_cl is None:
+        return False
+    cdrp = comp_cl.find_optional("cdrp")
+    if cdrp is None:
+        cdrp = Chunk("cdrp", 1, bytes([1 if drop_frame else 0]))
+        comp_cl.children.append(cdrp)
+    else:
+        cdrp.data = bytes([1 if drop_frame else 0])
+    return True
+
+
+# Project settings writers
+
+_BITS_REV = {8: 0, 16: 1, 32: 2}
+
+
+def set_project_bits_per_channel(root: Chunk, bits: int,
+                                  big_endian: bool) -> bool:
+    """Set project bits per channel (uint8 at nnhd offset 23)."""
+    nnhd = root.list.find_optional("nnhd")
+    if nnhd is None or not isinstance(nnhd.data, (bytes, bytearray)):
+        return False
+    data = bytearray(nnhd.data)
+    data[23] = _BITS_REV.get(bits, 0)
+    nnhd.data = bytes(data)
+    return True
+
+
+def set_project_linearize_working_space(root: Chunk, value: bool,
+                                         big_endian: bool) -> bool:
+    """Set project linearize working space flag (nnhd offset 30, bit 5)."""
+    nnhd = root.list.find_optional("nnhd")
+    if nnhd is None or not isinstance(nnhd.data, (bytes, bytearray)):
+        return False
+    data = bytearray(nnhd.data)
+    if value:
+        data[30] |= (1 << 5)
+    else:
+        data[30] &= ~(1 << 5)
+    nnhd.data = bytes(data)
+    return True
+
+
+def set_project_audio_sample_rate(root: Chunk, rate: float,
+                                   big_endian: bool) -> bool:
+    """Set project audio sample rate (float64 in adfr chunk, always big-endian)."""
+    adfr = root.list.find_optional("adfr")
+    if adfr is None or not isinstance(adfr.data, (bytes, bytearray)):
+        return False
+    data = bytearray(adfr.data)
+    struct.pack_into(">d", data, 0, rate)
+    adfr.data = bytes(data)
+    return True
+
+
+def set_project_working_gamma(root: Chunk, gamma: float,
+                               big_endian: bool) -> bool:
+    """Set project working gamma (dwga chunk: 0=2.2, 1=2.4)."""
+    dwga = root.list.find_optional("dwga")
+    if dwga is None or not isinstance(dwga.data, (bytes, bytearray)):
+        return False
+    dwga.data = bytes([1 if gamma > 2.3 else 0])
+    return True
+
+
+def set_project_compensate_scene_referred(root: Chunk, value: bool,
+                                           big_endian: bool) -> bool:
+    """Set project compensate for scene-referred profiles (acer chunk)."""
+    acer = root.list.find_optional("acer")
+    if acer is None or not isinstance(acer.data, (bytes, bytearray)):
+        return False
+    acer.data = bytes([1 if value else 0])
     return True
 
 
