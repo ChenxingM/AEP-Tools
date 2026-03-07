@@ -28,6 +28,11 @@ Represents an After Effects project. Returned by `Project.open()`.
 | `compositions` | `list[CompItem]` | R | All compositions |
 | `active_item` | `CompItem \| None` | R | Active composition |
 | `render_queue` | `RenderQueue` | R | Render queue |
+| `bits_per_channel` | `int` | R/W | Color depth: 8, 16, or 32 |
+| `working_gamma` | `float` | R/W | Working gamma value (e.g. 2.2) |
+| `linearize_working_space` | `bool` | R/W | Linearize working color space |
+| `compensate_scene_referred` | `bool` | R/W | Compensate for scene-referred profiles |
+| `audio_sample_rate` | `float` | R/W | Audio sample rate in Hz |
 
 ### Methods
 
@@ -36,13 +41,42 @@ Represents an After Effects project. Returned by `Project.open()`.
 | `item(index)` | `Any \| None` | Get item by 1-based index |
 | `comp(name_or_index)` | `CompItem \| None` | Get composition by name or 1-based index |
 | `save(path=None)` | `None` | Save to `.aep`. If path is None, overwrite original |
+
+#### Low-Level Change Methods
+
+These methods operate by comp/layer/asset ID. The property setters on `CompItem`, `Layer`, etc. are generally preferred.
+
+| Method | Returns | Description |
+|---|---|---|
 | `change_layer_name(comp_id, layer_id, name)` | `bool` | Rename a layer |
+| `change_layer_flag(comp_id, layer_id, flag_name, value)` | `bool` | Set layer boolean flag |
+| `change_layer_label(comp_id, layer_id, label)` | `bool` | Set layer label color (0-16) |
+| `change_layer_blend_mode(comp_id, layer_id, mode)` | `bool` | Set blend mode (int) |
+| `change_layer_track_matte(comp_id, layer_id, matte_type)` | `bool` | Set track matte type (int) |
+| `change_layer_quality(comp_id, layer_id, quality)` | `bool` | Set quality (0-2) |
+| `change_layer_time_field(comp_id, layer_id, field, value)` | `bool` | Set timing field (in_time, out_time, start_time, time_stretch) |
+| `change_layer_preserve_transparency(comp_id, layer_id, value)` | `bool` | Set preserve transparency |
+| `change_layer_light_type(comp_id, layer_id, light_type)` | `bool` | Set light type (0-3) |
 | `change_property_value(comp_id, layer_id, match_path, value)` | `bool` | Set property static value |
 | `change_keyframe_value(comp_id, layer_id, match_path, key_index, value)` | `bool` | Set keyframe value |
 | `change_keyframe_time(comp_id, layer_id, match_path, key_index, time)` | `bool` | Set keyframe time (seconds) |
 | `change_keyframe_interpolation(comp_id, layer_id, match_path, key_index, type)` | `bool` | Set interpolation (1=linear, 2=bezier, 3=hold) |
 | `change_keyframe_ease(comp_id, layer_id, match_path, key_index, ...)` | `bool` | Set temporal ease |
 | `change_asset_path(asset_id, new_path)` | `bool` | Set footage file path |
+| `change_comp_name(comp_id, name)` | `bool` | Rename composition |
+| `change_comp_dimensions(comp_id, width, height)` | `bool` | Set comp dimensions |
+| `change_comp_framerate(comp_id, fps)` | `bool` | Set frame rate |
+| `change_comp_duration(comp_id, seconds)` | `bool` | Set duration |
+| `change_comp_bgcolor(comp_id, r, g, b)` | `bool` | Set background color (0-255) |
+| `change_comp_work_area_start(comp_id, start)` | `bool` | Set work area start (seconds) |
+| `change_comp_work_area_end(comp_id, end)` | `bool` | Set work area end (seconds) |
+| `change_comp_flag(comp_id, flag_name, value)` | `bool` | Set comp flag (draft3d, motion_blur, etc.) |
+| `change_comp_shutter_angle(comp_id, angle)` | `bool` | Set shutter angle (degrees) |
+| `change_comp_shutter_phase(comp_id, phase)` | `bool` | Set shutter phase (degrees) |
+| `change_comp_motion_blur_samples(comp_id, spf, limit)` | `bool` | Set motion blur samples |
+| `change_comp_pixel_aspect(comp_id, ratio)` | `bool` | Set pixel aspect ratio |
+| `change_comp_display_start_time(comp_id, time)` | `bool` | Set display start time |
+| `change_comp_drop_frame(comp_id, drop_frame)` | `bool` | Set drop frame flag |
 
 ### Example
 
@@ -74,9 +108,22 @@ Represents a composition.
 | `duration` | `float` | R/W | Duration (seconds) |
 | `frame_rate` | `float` | R/W | Frames per second |
 | `frame_duration` | `float` | R | Duration of one frame (`1/frame_rate`) |
-| `work_area_start` | `float` | R | Work area start (seconds) |
-| `work_area_duration` | `float` | R | Work area duration (seconds) |
-| `bg_color` | `list[float]` | R/W | Background color `[r, g, b]` |
+| `work_area_start` | `float` | R/W | Work area start (seconds) |
+| `work_area_duration` | `float` | R/W | Work area duration (seconds) |
+| `bg_color` | `list[float]` | R/W | Background color `[r, g, b]` (0-255) |
+| `pixel_aspect` | `float` | R/W | Pixel aspect ratio |
+| `display_start_time` | `float` | R/W | Display start time (seconds) |
+| `draft3d` | `bool` | R/W | Draft 3D mode |
+| `motion_blur` | `bool` | R/W | Enable motion blur |
+| `frame_blending` | `bool` | R/W | Enable frame blending |
+| `hide_shy_layers` | `bool` | R/W | Hide shy layers |
+| `preserve_nested_resolution` | `bool` | R/W | Preserve nested comp resolution |
+| `preserve_nested_frame_rate` | `bool` | R/W | Preserve nested comp frame rate |
+| `drop_frame` | `bool` | R/W | Drop frame timecode |
+| `shutter_angle` | `int` | R/W | Shutter angle (degrees) |
+| `shutter_phase` | `int` | R/W | Shutter phase (degrees) |
+| `motion_blur_samples_per_frame` | `int` | R/W | Motion blur samples per frame |
+| `motion_blur_adaptive_sample_limit` | `int` | R/W | Adaptive sample limit |
 | `num_layers` | `int` | R | Number of layers |
 | `layers` | `LayerCollection` | R | All layers (1-based) |
 | `marker_property` | `MarkerProperty \| None` | R | Composition markers |
@@ -96,6 +143,10 @@ comp.width = 3840
 comp.height = 2160
 comp.frame_rate = 60.0
 comp.bg_color = [0, 0, 0]
+comp.motion_blur = True
+comp.shutter_angle = 180
+comp.work_area_start = 1.0
+comp.work_area_duration = 5.0
 
 for layer in comp.layers:
     print(layer.name)
@@ -114,7 +165,7 @@ Base class for all layers. Subtypes: `AVLayer`, `TextLayer`, `ShapeLayer`, `Came
 | `index` | `int` | R | 1-based index in composition |
 | `name` | `str` | R/W | Layer name |
 | `containing_comp` | `CompItem \| None` | R | Parent composition |
-| `label` | `int` | R/W | Label color index |
+| `label` | `int` | R/W | Label color index (0-16) |
 | `enabled` | `bool` | R/W | Visibility (eye icon) |
 | `solo` | `bool` | R/W | Solo |
 | `shy` | `bool` | R/W | Shy |
@@ -123,11 +174,16 @@ Base class for all layers. Subtypes: `AVLayer`, `TextLayer`, `ShapeLayer`, `Came
 | `guide_layer` | `bool` | R/W | Is guide layer |
 | `adjustment_layer` | `bool` | R/W | Is adjustment layer |
 | `three_d_layer` | `bool` | R/W | 3D layer |
+| `environment_layer` | `bool` | R/W | Environment layer |
 | `auto_orient` | `bool` | R/W | Auto-orient |
 | `effects_active` | `bool` | R/W | Effects enabled |
 | `motion_blur` | `bool` | R/W | Motion blur |
 | `collapse_transformation` | `bool` | R/W | Collapse / Continuously rasterize |
 | `sampling_quality` | `bool` | R/W | Bicubic sampling |
+| `frame_blending` | `bool` | R/W | Frame blending enabled |
+| `frame_blending_type` | `int` | R/W | Frame blending type (0=Frame Mix, 1=Pixel Motion) |
+| `audio_enabled` | `bool` | R/W | Audio enabled |
+| `preserve_transparency` | `bool` | R/W | Preserve transparency |
 | `in_point` | `float` | R/W | In point (seconds) |
 | `out_point` | `float` | R/W | Out point (seconds) |
 | `start_time` | `float` | R/W | Start time (seconds) |
@@ -242,7 +298,9 @@ layer.source_text.fonts    # ["Arial"]
 
 ## LightLayer (extends Layer)
 
-No additional properties.
+| Property | Type | Access | Description |
+|---|---|---|---|
+| `light_type` | `int` | R/W | Light type: 0=Parallel, 1=Spot, 2=Point, 3=Ambient |
 
 ---
 

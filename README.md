@@ -9,10 +9,15 @@ Parse After Effects project files (`.aep` binary / `.aepx` XML) into structured 
 - Rust-accelerated RIFF parsing (~15x faster than pure Python)
 - Extracts: compositions, layers, properties, keyframes, effects, masks, text, markers, render queue
 - **Write-back**: modify and save back to `.aep`:
-  - Layer names, composition names
+  - Layer names, composition names, footage asset file paths
   - Property static values (position, scale, opacity, etc.)
   - Keyframe values, times, interpolation types, and temporal ease
-  - Footage asset file paths
+  - Layer flags (visible, solo, shy, locked, 3D, guide, adjustment, motion blur, etc.)
+  - Layer blend mode, track matte, quality, label, timing, preserve transparency
+  - Light type for light layers
+  - Comp flags (draft 3D, motion blur, frame blending, hide shy, preserve nested, drop frame)
+  - Comp settings (work area, shutter angle/phase, motion blur samples, pixel aspect, display start time)
+  - Project settings (bits per channel, working gamma, linearize working space, compensate scene referred, audio sample rate)
 - AE scripting-style API (`aep_tools`) with 1-based indexing
 - PySide6 GUI viewer/editor with AE-like dark theme
 - CLI tool for batch processing
@@ -114,7 +119,9 @@ GUI features:
 - Dark theme mimicking After Effects
 - Project panel with folder structure, footage paths, compositions
 - Layer tree with properties, keyframes (expandable with time/type/value/ease)
-- Right-click editing: layer names, property values, keyframe values/time/interpolation/ease, footage paths
+- Right-click editing: layer names/flags/blend mode/timing, property values, keyframe values/time/interpolation/ease, footage paths
+- Comp editing: name, dimensions, frame rate, duration, background color, flags, work area, shutter, motion blur, pixel aspect
+- Project settings: bits per channel, working gamma, linearize, compensate scene referred, audio sample rate
 - Save modified `.aep` files
 
 ## Project Structure
@@ -154,9 +161,9 @@ aep-parser/
 |       +-- _constants.py         # Enums, match name maps
 |       +-- _writer.py            # Binary write-back (RIFX serializer)
 +-- tests/
-|   +-- test_parser.py            # Parser tests (16)
-|   +-- test_tools.py             # aep_tools API tests (83)
-|   +-- test_writer.py            # Writer tests (28)
+|   +-- test_parser.py            # Parser tests
+|   +-- test_tools.py             # aep_tools API tests
+|   +-- test_writer.py            # Writer tests
 +-- docs/
     +-- api.md                    # aep_tools API reference (English)
     +-- api-zh.md                 # aep_tools API reference (Chinese)

@@ -26,6 +26,11 @@
 | `compositions` | `list[CompItem]` | R | 所有合成 |
 | `active_item` | `CompItem \| None` | R | 活动合成 |
 | `render_queue` | `RenderQueue` | R | 渲染队列 |
+| `bits_per_channel` | `int` | R/W | 色深：8、16 或 32 |
+| `working_gamma` | `float` | R/W | 工作 Gamma 值（如 2.2） |
+| `linearize_working_space` | `bool` | R/W | 线性化工作色彩空间 |
+| `compensate_scene_referred` | `bool` | R/W | 补偿场景参照配置文件 |
+| `audio_sample_rate` | `float` | R/W | 音频采样率（Hz） |
 
 ### 方法
 
@@ -34,13 +39,42 @@
 | `item(index)` | `Any \| None` | 按 1-based 索引获取元素 |
 | `comp(name_or_index)` | `CompItem \| None` | 按名称或 1-based 索引获取合成 |
 | `save(path=None)` | `None` | 保存为 `.aep`。path 为 None 时覆盖原文件 |
+
+#### 低级修改方法
+
+通过 comp/layer/asset ID 操作。一般推荐使用 `CompItem`、`Layer` 等对象上的属性设置器。
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
 | `change_layer_name(comp_id, layer_id, name)` | `bool` | 重命名图层 |
+| `change_layer_flag(comp_id, layer_id, flag_name, value)` | `bool` | 设置图层布尔开关 |
+| `change_layer_label(comp_id, layer_id, label)` | `bool` | 设置标签颜色（0-16） |
+| `change_layer_blend_mode(comp_id, layer_id, mode)` | `bool` | 设置混合模式（int） |
+| `change_layer_track_matte(comp_id, layer_id, matte_type)` | `bool` | 设置轨道遮罩类型（int） |
+| `change_layer_quality(comp_id, layer_id, quality)` | `bool` | 设置质量（0-2） |
+| `change_layer_time_field(comp_id, layer_id, field, value)` | `bool` | 设置时间字段（in_time, out_time, start_time, time_stretch） |
+| `change_layer_preserve_transparency(comp_id, layer_id, value)` | `bool` | 设置保持透明度 |
+| `change_layer_light_type(comp_id, layer_id, light_type)` | `bool` | 设置灯光类型（0-3） |
 | `change_property_value(comp_id, layer_id, match_path, value)` | `bool` | 设置属性静态值 |
 | `change_keyframe_value(comp_id, layer_id, match_path, key_index, value)` | `bool` | 设置关键帧值 |
 | `change_keyframe_time(comp_id, layer_id, match_path, key_index, time)` | `bool` | 设置关键帧时间（秒） |
 | `change_keyframe_interpolation(comp_id, layer_id, match_path, key_index, type)` | `bool` | 设置插值（1=线性, 2=贝塞尔, 3=定格） |
 | `change_keyframe_ease(comp_id, layer_id, match_path, key_index, ...)` | `bool` | 设置缓动 |
 | `change_asset_path(asset_id, new_path)` | `bool` | 设置素材文件路径 |
+| `change_comp_name(comp_id, name)` | `bool` | 重命名合成 |
+| `change_comp_dimensions(comp_id, width, height)` | `bool` | 设置合成尺寸 |
+| `change_comp_framerate(comp_id, fps)` | `bool` | 设置帧率 |
+| `change_comp_duration(comp_id, seconds)` | `bool` | 设置时长 |
+| `change_comp_bgcolor(comp_id, r, g, b)` | `bool` | 设置背景色（0-255） |
+| `change_comp_work_area_start(comp_id, start)` | `bool` | 设置工作区起点（秒） |
+| `change_comp_work_area_end(comp_id, end)` | `bool` | 设置工作区终点（秒） |
+| `change_comp_flag(comp_id, flag_name, value)` | `bool` | 设置合成开关（draft3d, motion_blur 等） |
+| `change_comp_shutter_angle(comp_id, angle)` | `bool` | 设置快门角度（度） |
+| `change_comp_shutter_phase(comp_id, phase)` | `bool` | 设置快门相位（度） |
+| `change_comp_motion_blur_samples(comp_id, spf, limit)` | `bool` | 设置运动模糊采样数 |
+| `change_comp_pixel_aspect(comp_id, ratio)` | `bool` | 设置像素宽高比 |
+| `change_comp_display_start_time(comp_id, time)` | `bool` | 设置显示起始时间 |
+| `change_comp_drop_frame(comp_id, drop_frame)` | `bool` | 设置 Drop Frame 标志 |
 
 ### 示例
 
@@ -72,9 +106,22 @@ proj.save("output.aep")
 | `duration` | `float` | R/W | 时长（秒） |
 | `frame_rate` | `float` | R/W | 帧率 |
 | `frame_duration` | `float` | R | 单帧时长（`1/frame_rate`） |
-| `work_area_start` | `float` | R | 工作区起始（秒） |
-| `work_area_duration` | `float` | R | 工作区时长（秒） |
-| `bg_color` | `list[float]` | R/W | 背景颜色 `[r, g, b]` |
+| `work_area_start` | `float` | R/W | 工作区起始（秒） |
+| `work_area_duration` | `float` | R/W | 工作区时长（秒） |
+| `bg_color` | `list[float]` | R/W | 背景颜色 `[r, g, b]`（0-255） |
+| `pixel_aspect` | `float` | R/W | 像素宽高比 |
+| `display_start_time` | `float` | R/W | 显示起始时间（秒） |
+| `draft3d` | `bool` | R/W | Draft 3D 模式 |
+| `motion_blur` | `bool` | R/W | 启用运动模糊 |
+| `frame_blending` | `bool` | R/W | 启用帧混合 |
+| `hide_shy_layers` | `bool` | R/W | 隐藏害羞图层 |
+| `preserve_nested_resolution` | `bool` | R/W | 保持嵌套合成分辨率 |
+| `preserve_nested_frame_rate` | `bool` | R/W | 保持嵌套合成帧率 |
+| `drop_frame` | `bool` | R/W | Drop Frame 时间码 |
+| `shutter_angle` | `int` | R/W | 快门角度（度） |
+| `shutter_phase` | `int` | R/W | 快门相位（度） |
+| `motion_blur_samples_per_frame` | `int` | R/W | 每帧运动模糊采样数 |
+| `motion_blur_adaptive_sample_limit` | `int` | R/W | 自适应采样上限 |
 | `num_layers` | `int` | R | 图层数量 |
 | `layers` | `LayerCollection` | R | 所有图层（1-based） |
 | `marker_property` | `MarkerProperty \| None` | R | 合成标记 |
@@ -94,6 +141,10 @@ comp.width = 3840
 comp.height = 2160
 comp.frame_rate = 60.0
 comp.bg_color = [0, 0, 0]
+comp.motion_blur = True
+comp.shutter_angle = 180
+comp.work_area_start = 1.0
+comp.work_area_duration = 5.0
 
 for layer in comp.layers:
     print(layer.name)
@@ -112,7 +163,7 @@ for layer in comp.layers:
 | `index` | `int` | R | 合成中的 1-based 索引 |
 | `name` | `str` | R/W | 图层名称 |
 | `containing_comp` | `CompItem \| None` | R | 所属合成 |
-| `label` | `int` | R/W | 标签颜色索引 |
+| `label` | `int` | R/W | 标签颜色索引（0-16） |
 | `enabled` | `bool` | R/W | 可见性（眼睛图标） |
 | `solo` | `bool` | R/W | 独奏 |
 | `shy` | `bool` | R/W | 害羞 |
@@ -121,11 +172,16 @@ for layer in comp.layers:
 | `guide_layer` | `bool` | R/W | 是否参考线图层 |
 | `adjustment_layer` | `bool` | R/W | 是否调整图层 |
 | `three_d_layer` | `bool` | R/W | 3D 图层 |
+| `environment_layer` | `bool` | R/W | 环境图层 |
 | `auto_orient` | `bool` | R/W | 自动朝向 |
 | `effects_active` | `bool` | R/W | 效果启用 |
 | `motion_blur` | `bool` | R/W | 运动模糊 |
 | `collapse_transformation` | `bool` | R/W | 折叠变换 / 连续光栅化 |
 | `sampling_quality` | `bool` | R/W | 双立方采样 |
+| `frame_blending` | `bool` | R/W | 帧混合 |
+| `frame_blending_type` | `int` | R/W | 帧混合类型（0=帧混合, 1=像素运动） |
+| `audio_enabled` | `bool` | R/W | 音频启用 |
+| `preserve_transparency` | `bool` | R/W | 保持透明度 |
 | `in_point` | `float` | R/W | 入点（秒） |
 | `out_point` | `float` | R/W | 出点（秒） |
 | `start_time` | `float` | R/W | 起始时间（秒） |
@@ -240,7 +296,9 @@ layer.source_text.fonts    # ["Arial"]
 
 ## LightLayer（继承 Layer）
 
-无额外属性。
+| 属性 | 类型 | 访问 | 说明 |
+|---|---|---|---|
+| `light_type` | `int` | R/W | 灯光类型：0=平行光, 1=聚光灯, 2=点光源, 3=环境光 |
 
 ---
 
