@@ -5,17 +5,20 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, QRect, QSize, Signal, QPoint
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPolygon
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QPixmap, QPolygon
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QHeaderView, QInputDialog,
-    QLabel, QLineEdit, QMenu, QStyle, QStyledItemDelegate,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QInputDialog,
+    QLabel, QMenu, QStyle, QStyledItemDelegate,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .dialogs import CompSettingsDialog, KeyframeEaseDialog, TimeSpinBox
 from .theme import (
     ROLE_KEYFRAMES, ROLE_NODE_TYPE, ROLE_ASSET_ID, ROLE_LAYER_ID, ROLE_MATCH_PATH,
     ROLE_KEY_INDEX, ROLE_KEY_DATA,
-    COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
+    COLOR_ACCENT, COLOR_KF, COLOR_KF_HOLD, COLOR_MODIFIED,
+    COLOR_TEXT, COLOR_TEXT_ANIM, COLOR_TEXT_DIM,
     LAYER_TYPE_LABELS, ADBE_NAMES,
     fmt_val, get_color_swatch, get_keyframes, resolve_layer_visual_type,
 )
@@ -105,18 +108,21 @@ def _dim_labels(match_path: list[str] | None, n: int) -> list[str]:
 # -- Multi-value Edit Dialog --
 
 class _MultiValueDialog(QDialog):
-    """Dialog with separate input fields per dimension."""
+    """Dialog with separate QDoubleSpinBox fields per dimension."""
 
     def __init__(self, title: str, labels: list[str],
                  values: list[float], parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         layout = QFormLayout(self)
-        self.edits: list[QLineEdit] = []
+        self.spins: list[QDoubleSpinBox] = []
         for label, value in zip(labels, values):
-            edit = QLineEdit(str(value))
-            layout.addRow(f"{label}:", edit)
-            self.edits.append(edit)
+            sb = QDoubleSpinBox()
+            sb.setRange(-999999, 999999)
+            sb.setDecimals(3)
+            sb.setValue(value)
+            layout.addRow(f"{label}:", sb)
+            self.spins.append(sb)
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -124,10 +130,7 @@ class _MultiValueDialog(QDialog):
         layout.addRow(buttons)
 
     def get_values(self) -> list[float] | None:
-        try:
-            return [float(e.text()) for e in self.edits]
-        except ValueError:
-            return None
+        return [sb.value() for sb in self.spins]
 
 
 # -- Keyframe Timeline Delegate --
@@ -513,6 +516,7 @@ class CompWidget(QWidget):
     """Widget showing a single composition's layers and properties."""
 
     precomp_requested = Signal(int)
+    modified = Signal()
 
     def __init__(self, comp: dict, parent=None, *,
                  assets: dict | None = None, tools_project=None):
@@ -535,14 +539,11 @@ class CompWidget(QWidget):
         out_t = c.get("outTime", 0)
         n_layers = len(c.get("layers", []))
 
-        info = QLabel(
-            f"  {w}\u00d7{h}  |  {fps:g} fps  |  "
-            f"Duration: {dur:.2f}s  |  Work Area: {in_t:.2f} \u2013 {out_t:.2f}s  |  "
-            f"{n_layers} layers"
-        )
-        info.setObjectName("comp_info")
-        info.setFixedHeight(32)
-        layout.addWidget(info)
+        self._info_label = QLabel()
+        self._info_label.setObjectName("comp_info")
+        self._info_label.setFixedHeight(32)
+        self._update_info_bar()
+        layout.addWidget(self._info_label)
 
         self.tree = QTreeWidget()
         self.tree.setAlternatingRowColors(True)
@@ -586,6 +587,23 @@ class CompWidget(QWidget):
     def _writable(self) -> bool:
         return self._tools_project is not None and self._tools_project.writable
 
+    def _update_info_bar(self):
+        c = self.comp
+        fps = c.get("framerate", 0)
+        w, h = c.get("width", 0), c.get("height", 0)
+        dur = c.get("duration", 0)
+        in_t = c.get("inTime", 0)
+        out_t = c.get("outTime", 0)
+        n_layers = len(c.get("layers", []))
+        self._info_label.setText(
+            f"  {w}\u00d7{h}  |  {fps:g} fps  |  "
+            f"Duration: {dur:.2f}s  |  Work Area: {in_t:.2f} \u2013 {out_t:.2f}s  |  "
+            f"{n_layers} layers"
+        )
+
+    def _notify_modified(self):
+        self.modified.emit()
+
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
         """Double-click navigates into pre-comps only."""
         asset_id = item.data(0, ROLE_ASSET_ID)
@@ -622,8 +640,9 @@ class CompWidget(QWidget):
                 act.setChecked(self._get_layer_flag(item, flag_key))
                 act.triggered.connect(
                     lambda checked, k=flag_key: self._toggle_layer_flag(item, k, checked))
-            # Preserve Transparency (separate API)
-            pt_act = menu.addAction("Preserve Transparency")
+            # Preserve Transparency inside Flags submenu (separated)
+            flags_menu.addSeparator()
+            pt_act = flags_menu.addAction("Preserve Transparency")
             pt_act.setCheckable(True)
             pt_act.setChecked(self._get_layer_flag(item, "preserve_transparency"))
             pt_act.triggered.connect(
@@ -631,56 +650,101 @@ class CompWidget(QWidget):
             # Light Type (only for light layers)
             layer_id = item.data(0, ROLE_LAYER_ID)
             layer_type = None
+            layer_dict = None
             for layer in self.comp.get("layers", []):
                 if layer.get("id") == layer_id:
                     layer_type = layer.get("type")
+                    layer_dict = layer
                     break
             if layer_type == "light":
                 light_menu = menu.addMenu("Light Type")
+                cur_light = layer_dict.get("lightType", "parallel") if layer_dict else ""
+                _light_map = {"parallel": 0, "spot": 1, "point": 2, "ambient": 3}
+                cur_light_int = _light_map.get(cur_light, -1)
                 for lname, lval in [("Parallel", 0), ("Spot", 1),
                                      ("Point", 2), ("Ambient", 3)]:
-                    light_menu.addAction(
+                    act = light_menu.addAction(
                         lname, lambda v=lval: self._set_layer_light_type(item, v))
-            # Label
+                    act.setCheckable(True)
+                    act.setChecked(lval == cur_light_int)
+            # Label (with color swatches and current-value checkmark)
             label_menu = menu.addMenu("Label")
+            cur_label = layer_dict.get("labelColor", 0) if layer_dict else 0
+            _label_colors = [
+                None, "#ff0000", "#ffff00", "#00ffff", "#ff69b4", "#e6e6fa",
+                "#ffdab9", "#98fb98", "#4169e1", "#008000", "#800080",
+                "#ffa500", "#a52a2a", "#ff00ff", "#00ced1", "#d2b48c", "#006400",
+            ]
             for idx, lbl in enumerate(
                 ["None", "Red", "Yellow", "Aqua", "Pink", "Lavender",
                  "Peach", "Sea Foam", "Blue", "Green", "Purple",
                  "Orange", "Brown", "Fuchsia", "Cyan", "Tan", "Dark Green"]):
-                label_menu.addAction(lbl, lambda i=idx: self._set_layer_label(item, i))
-            # Blend mode
+                act = label_menu.addAction(lbl, lambda i=idx: self._set_layer_label(item, i))
+                act.setCheckable(True)
+                act.setChecked(idx == cur_label)
+                if idx < len(_label_colors) and _label_colors[idx]:
+                    px = QPixmap(12, 12)
+                    px.fill(QColor(_label_colors[idx]))
+                    act.setIcon(px)
+            # Blend mode — grouped like AE with current value checkmark
             blend_menu = menu.addMenu("Blend Mode")
-            for bname, bval in [
-                ("Normal", 2), ("Dissolve", 3),
-                ("Add", 4), ("Multiply", 5), ("Screen", 6),
-                ("Overlay", 7), ("Soft Light", 8), ("Hard Light", 9),
-                ("Darken", 10), ("Lighten", 11),
-                ("Classic Difference", 12),
-                ("Hue", 13), ("Saturation", 14), ("Color", 15), ("Luminosity", 16),
-                ("Stencil Alpha", 17), ("Stencil Luma", 18),
-                ("Silhouette Alpha", 19), ("Silhouette Luma", 20),
-                ("Luminescent Premul", 21), ("Alpha Add", 22),
-                ("Classic Color Dodge", 23), ("Classic Color Burn", 24),
-                ("Exclusion", 25), ("Difference", 26),
-                ("Color Dodge", 27), ("Color Burn", 28),
-                ("Linear Dodge", 29), ("Linear Burn", 30),
-                ("Linear Light", 31), ("Vivid Light", 32),
-                ("Pin Light", 33), ("Hard Mix", 34),
-                ("Lighter Color", 35), ("Darker Color", 36),
-                ("Subtract", 37), ("Divide", 38),
-            ]:
-                blend_menu.addAction(bname, lambda v=bval: self._set_layer_blend_mode(item, v))
-            # Track matte
+            cur_blend = layer_dict.get("blendMode", "normal") if layer_dict else ""
+            _cur_blend_int = -1
+            for _bk, _bv in _BLEND_MODE_NAMES.items():
+                if _bk == cur_blend:
+                    # find int from INT_NAMES
+                    for _ik, _iv in _BLEND_MODE_INT_NAMES.items():
+                        if _iv == _bv:
+                            _cur_blend_int = _ik
+                            break
+                    break
+            _blend_groups = [
+                [("Normal", 2), ("Dissolve", 3)],
+                [("Darken", 10), ("Multiply", 5), ("Color Burn", 28),
+                 ("Linear Burn", 30), ("Darker Color", 36),
+                 ("Classic Color Burn", 24)],
+                [("Lighten", 11), ("Screen", 6), ("Color Dodge", 27),
+                 ("Linear Dodge", 29), ("Add", 4), ("Lighter Color", 35),
+                 ("Classic Color Dodge", 23)],
+                [("Overlay", 7), ("Soft Light", 8), ("Hard Light", 9),
+                 ("Vivid Light", 32), ("Linear Light", 31),
+                 ("Pin Light", 33), ("Hard Mix", 34)],
+                [("Difference", 26), ("Classic Difference", 12),
+                 ("Exclusion", 25), ("Subtract", 37), ("Divide", 38)],
+                [("Hue", 13), ("Saturation", 14), ("Color", 15),
+                 ("Luminosity", 16)],
+                [("Stencil Alpha", 17), ("Stencil Luma", 18),
+                 ("Silhouette Alpha", 19), ("Silhouette Luma", 20)],
+                [("Alpha Add", 22), ("Luminescent Premul", 21)],
+            ]
+            for gi, group in enumerate(_blend_groups):
+                if gi > 0:
+                    blend_menu.addSeparator()
+                for bname, bval in group:
+                    act = blend_menu.addAction(
+                        bname, lambda v=bval: self._set_layer_blend_mode(item, v))
+                    act.setCheckable(True)
+                    act.setChecked(bval == _cur_blend_int)
+            # Track matte (with checkmark)
             matte_menu = menu.addMenu("Track Matte")
+            cur_matte = layer_dict.get("matteMode", "none") if layer_dict else "none"
+            _matte_str_to_int = {"none": 0, "alpha": 1, "alphaInverted": 2,
+                                 "luma": 3, "lumaInverted": 4}
+            cur_matte_int = _matte_str_to_int.get(cur_matte, 0)
             for mname, mval in [
                 ("None", 0), ("Alpha", 1), ("Alpha Inverted", 2),
                 ("Luma", 3), ("Luma Inverted", 4),
             ]:
-                matte_menu.addAction(mname, lambda v=mval: self._set_layer_track_matte(item, v))
-            # Quality
+                act = matte_menu.addAction(mname, lambda v=mval: self._set_layer_track_matte(item, v))
+                act.setCheckable(True)
+                act.setChecked(mval == cur_matte_int)
+            # Quality (with checkmark)
             quality_menu = menu.addMenu("Quality")
+            cur_quality = layer_dict.get("quality", 1) if layer_dict else 1
             for qname, qval in [("Wireframe", 0), ("Draft", 1), ("Best", 2)]:
-                quality_menu.addAction(qname, lambda v=qval: self._set_layer_quality(item, v))
+                act = quality_menu.addAction(qname, lambda v=qval: self._set_layer_quality(item, v))
+                act.setCheckable(True)
+                act.setChecked(qval == cur_quality)
             # Timing
             menu.addAction("Edit Timing...", lambda: self._edit_layer_timing(item))
 
@@ -723,9 +787,11 @@ class CompWidget(QWidget):
         comp_id = self.comp.get("id")
         self.tree.blockSignals(True)
         item.setText(1, new_name)
+        item.setForeground(1, COLOR_MODIFIED)
         self.tree.blockSignals(False)
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_name(comp_id, layer_id, new_name)
+        self._notify_modified()
 
     def _get_layer_flag(self, item: QTreeWidgetItem, flag_key: str) -> bool:
         """Read a flag from the layer data in the comp dict."""
@@ -741,6 +807,8 @@ class CompWidget(QWidget):
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_flag(comp_id, layer_id, flag_key, value)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _toggle_preserve_transparency(self, item: QTreeWidgetItem, value: bool):
         layer_id = item.data(0, ROLE_LAYER_ID)
@@ -748,6 +816,8 @@ class CompWidget(QWidget):
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_preserve_transparency(
                 comp_id, layer_id, value)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _set_layer_light_type(self, item: QTreeWidgetItem, light_type: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
@@ -755,12 +825,16 @@ class CompWidget(QWidget):
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_light_type(
                 comp_id, layer_id, light_type)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _set_layer_label(self, item: QTreeWidgetItem, label: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_label(comp_id, layer_id, label)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _set_layer_blend_mode(self, item: QTreeWidgetItem, mode: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
@@ -770,18 +844,24 @@ class CompWidget(QWidget):
             # Update display — map int back to display name
             name = _BLEND_MODE_INT_NAMES.get(mode, "")
             self._update_layer_info(item, blend_name=name)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _set_layer_track_matte(self, item: QTreeWidgetItem, matte_type: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_track_matte(comp_id, layer_id, matte_type)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _set_layer_quality(self, item: QTreeWidgetItem, quality: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_quality(comp_id, layer_id, quality)
+            item.setForeground(2, COLOR_MODIFIED)
+            self._notify_modified()
 
     def _update_layer_info(self, item: QTreeWidgetItem, blend_name: str | None = None):
         """Refresh layer attributes (column 2) after a blend mode or flag change."""
@@ -819,23 +899,43 @@ class CompWidget(QWidget):
         in_t = layer_data.get("inTime", 0) if layer_data else 0
         out_t = layer_data.get("outTime", 0) if layer_data else 0
         start_t = layer_data.get("startTime", 0) if layer_data else 0
-        stretch = layer_data.get("stretch", 1.0) if layer_data else 1.0
+        stretch = layer_data.get("timeStretch", 1.0) if layer_data else 1.0
+        framerate = self.comp.get("framerate", 30.0)
 
-        dlg = _MultiValueDialog(
-            "Edit Layer Timing",
-            ["In Point (s)", "Out Point (s)", "Start Time (s)", "Stretch"],
-            [in_t, out_t, start_t, stretch],
-            self)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Layer Timing")
+        dl = QFormLayout(dlg)
+        in_tsb = TimeSpinBox(framerate)
+        in_tsb.set_value_seconds(in_t)
+        dl.addRow("In Point:", in_tsb)
+        out_tsb = TimeSpinBox(framerate)
+        out_tsb.set_value_seconds(out_t)
+        dl.addRow("Out Point:", out_tsb)
+        start_tsb = TimeSpinBox(framerate)
+        start_tsb.set_value_seconds(start_t)
+        dl.addRow("Start Time:", start_tsb)
+        from PySide6.QtWidgets import QDoubleSpinBox as _DSB
+        stretch_sb = _DSB()
+        stretch_sb.setRange(-999, 999)
+        stretch_sb.setDecimals(3)
+        stretch_sb.setValue(stretch)
+        dl.addRow("Time Stretch:", stretch_sb)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        dl.addRow(buttons)
         if dlg.exec() != QDialog.Accepted:
             return
-        vals = dlg.get_values()
-        if vals is None or len(vals) != 4:
-            return
+        vals = [in_tsb.value_seconds(), out_tsb.value_seconds(),
+                start_tsb.value_seconds(), stretch_sb.value()]
         for field, val in zip(
             ["in_time", "out_time", "start_time", "time_stretch"], vals
         ):
             self._tools_project.change_layer_time_field(
                 comp_id, layer_id, field, val)
+        item.setForeground(3, COLOR_MODIFIED)
+        self._notify_modified()
 
     def _edit_property(self, item: QTreeWidgetItem):
         match_path = item.data(0, ROLE_MATCH_PATH)
@@ -854,13 +954,12 @@ class CompWidget(QWidget):
             if new_value is None:
                 return
         else:
-            # Scalar: simple input
-            new_text, ok = QInputDialog.getText(
-                self, "Edit Value", f"{item.text(1)}:", text=old_text)
+            # Scalar: use getDouble
+            scalar = old_value if isinstance(old_value, (int, float)) else 0.0
+            new_value, ok = QInputDialog.getDouble(
+                self, "Edit Value", f"{item.text(1)}:",
+                float(scalar), -999999, 999999, 3)
             if not ok:
-                return
-            new_value = _parse_value_text(new_text)
-            if new_value is None:
                 return
 
         # Walk up to find the layer item
@@ -873,10 +972,12 @@ class CompWidget(QWidget):
         comp_id = self.comp.get("id")
         self.tree.blockSignals(True)
         item.setText(3, fmt_val(new_value))
+        item.setForeground(3, COLOR_MODIFIED)
         self.tree.blockSignals(False)
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_property_value(
                 comp_id, layer_id, match_path, new_value)
+        self._notify_modified()
 
     def _find_kf_context(self, item: QTreeWidgetItem):
         """Walk up from a keyframe item to find layer_id and match_path."""
@@ -966,6 +1067,8 @@ class CompWidget(QWidget):
             comp_id, layer_id, match_path, key_index, new_value)
         kf_data["value"] = new_value
         self._update_kf_display(item, kf_data)
+        item.setForeground(1, COLOR_MODIFIED)
+        self._notify_modified()
 
     def _edit_kf_time(self, item: QTreeWidgetItem):
         ctx = self._find_kf_context(item)
@@ -974,19 +1077,27 @@ class CompWidget(QWidget):
         comp_id, layer_id, match_path, key_index = ctx
         kf_data = item.data(0, ROLE_KEY_DATA)
         old_time = kf_data.get("time", 0) if kf_data else 0
-        new_text, ok = QInputDialog.getText(
-            self, "Edit Keyframe Time", f"Key {key_index} time (seconds):",
-            text=f"{old_time:.3f}")
-        if not ok:
+        framerate = self.comp.get("framerate", 30.0)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Edit Keyframe {key_index} Time")
+        dl = QFormLayout(dlg)
+        tsb = TimeSpinBox(framerate)
+        tsb.set_value_seconds(old_time)
+        dl.addRow("Time:", tsb)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        dl.addRow(buttons)
+        if dlg.exec() != QDialog.Accepted:
             return
-        try:
-            new_time = float(new_text.strip())
-        except ValueError:
-            return
+        new_time = tsb.value_seconds()
         self._tools_project.change_keyframe_time(
             comp_id, layer_id, match_path, key_index, new_time)
         kf_data["time"] = new_time
         self._update_kf_display(item, kf_data)
+        item.setForeground(1, COLOR_MODIFIED)
+        self._notify_modified()
 
     def _set_kf_interp(self, item: QTreeWidgetItem, transition_type: int):
         """Set out interpolation — modifies this keyframe's transition_type."""
@@ -1000,6 +1111,8 @@ class CompWidget(QWidget):
         type_names = {1: "linear", 2: "bezier", 3: "hold"}
         kf_data["transitionType"] = type_names.get(transition_type, str(transition_type))
         self._update_kf_display(item, kf_data)
+        item.setForeground(1, COLOR_MODIFIED)
+        self._notify_modified()
 
     def _set_kf_in_interp(self, item: QTreeWidgetItem, transition_type: int):
         """Set in interpolation — modifies the previous keyframe's transition_type.
@@ -1034,38 +1147,31 @@ class CompWidget(QWidget):
         comp_id, layer_id, match_path, key_index = ctx
         kf_data = item.data(0, ROLE_KEY_DATA) or {}
 
+        # Determine dimensions from existing ease data or value
         in_spd = kf_data.get("inSpeed", [])
-        in_inf = kf_data.get("inInfluence", [])
-        out_spd = kf_data.get("outSpeed", [])
-        out_inf = kf_data.get("outInfluence", [])
+        dims = len(in_spd) if in_spd else 1
+        if dims < 1:
+            val = kf_data.get("value")
+            if isinstance(val, list):
+                dims = len(val)
+            elif isinstance(val, dict):
+                if "x" in val and "y" in val:
+                    dims = 3 if "z" in val else 2
+                elif "r" in val:
+                    dims = 3
+                else:
+                    dims = 1
+            else:
+                dims = 1
 
-        # Format current ease as editable text
-        current = (
-            f"inSpeed={in_spd}, inInfluence={in_inf}, "
-            f"outSpeed={out_spd}, outInfluence={out_inf}"
-        )
-        new_text, ok = QInputDialog.getText(
-            self, "Edit Temporal Ease",
-            "Format: inSpeed, inInfluence, outSpeed, outInfluence\n"
-            "Single value or comma-separated per component:",
-            text=current)
-        if not ok:
+        dlg = KeyframeEaseDialog(kf_data, dims, self)
+        if dlg.exec() != QDialog.Accepted:
             return
-
-        # Parse: try to extract 4 groups from the text
-        nums = re.findall(r'[\d.e+-]+', new_text)
-        if not nums:
-            return
-        floats = [float(x) for x in nums]
-
-        # Distribute evenly into 4 groups
-        n = len(floats) // 4
-        if n < 1:
-            return
-        new_in_spd = floats[:n]
-        new_in_inf = floats[n:n*2]
-        new_out_spd = floats[n*2:n*3]
-        new_out_inf = floats[n*3:n*4]
+        ease = dlg.get_ease()
+        new_in_spd = ease["inSpeed"]
+        new_in_inf = ease["inInfluence"]
+        new_out_spd = ease["outSpeed"]
+        new_out_inf = ease["outInfluence"]
 
         self._tools_project.change_keyframe_ease(
             comp_id, layer_id, match_path, key_index,
@@ -1076,6 +1182,7 @@ class CompWidget(QWidget):
         kf_data["outSpeed"] = new_out_spd
         kf_data["outInfluence"] = new_out_inf
         self._update_kf_display(item, kf_data)
+        item.setForeground(1, COLOR_MODIFIED)
 
         # Update ease child item if present
         for ci in range(item.childCount()):
@@ -1092,6 +1199,7 @@ class CompWidget(QWidget):
                     ease_parts.append(f"Out: {' '.join(pairs)}")
                 child.setText(3, "  |  ".join(ease_parts))
                 break
+        self._notify_modified()
 
 
 # -- Project Panel --
@@ -1100,6 +1208,8 @@ class ProjectPanel(QWidget):
     """Left sidebar showing project structure."""
 
     comp_selected = Signal(int)
+    modified = Signal()
+    comp_modified = Signal(int, dict)  # comp_id, changes dict
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1311,12 +1421,10 @@ class ProjectPanel(QWidget):
         # Comp items have a comp_id in UserRole
         comp_id = item.data(0, Qt.UserRole)
         if comp_id is not None:
-            menu.addAction("Rename Composition", lambda: self._rename_comp(item, comp_id))
-            menu.addAction("Edit Dimensions...", lambda: self._edit_comp_dimensions(comp_id))
-            menu.addAction("Edit Frame Rate...", lambda: self._edit_comp_framerate(comp_id))
-            menu.addAction("Edit Duration...", lambda: self._edit_comp_duration(comp_id))
-            menu.addAction("Edit Background Color...", lambda: self._edit_comp_bgcolor(comp_id))
-            # Comp Flags submenu
+            menu.addAction("Composition Settings...",
+                           lambda: self._open_comp_settings(item, comp_id))
+            menu.addSeparator()
+            # Comp Flags submenu (retained)
             comp_flags_menu = menu.addMenu("Comp Flags")
             for flag_label, flag_key in [
                 ("Draft 3D", "draft3d"),
@@ -1332,34 +1440,6 @@ class ProjectPanel(QWidget):
                 act.setChecked(self._get_comp_flag(comp_id, flag_key))
                 act.triggered.connect(
                     lambda checked, k=flag_key, cid=comp_id: self._toggle_comp_flag(cid, k, checked))
-            # Additional comp edit actions
-            menu.addAction("Edit Work Area...", lambda: self._edit_comp_work_area(comp_id))
-            menu.addAction("Edit Shutter...", lambda: self._edit_comp_shutter(comp_id))
-            menu.addAction("Edit Motion Blur Samples...", lambda: self._edit_comp_mb_samples(comp_id))
-            menu.addAction("Edit Pixel Aspect...", lambda: self._edit_comp_pixel_aspect(comp_id))
-            menu.addAction("Edit Display Start Time...", lambda: self._edit_comp_display_start(comp_id))
-
-        # Project Settings — always available when writable
-        if self._tools_project is not None and self._tools_project.writable:
-            settings_menu = menu.addMenu("Project Settings")
-            bpc_menu = settings_menu.addMenu("Bits Per Channel")
-            for bits in [8, 16, 32]:
-                bpc_menu.addAction(f"{bits} bpc",
-                                   lambda b=bits: self._set_project_bpc(b))
-            gamma_menu = settings_menu.addMenu("Working Gamma")
-            gamma_menu.addAction("2.2", lambda: self._set_project_gamma(2.2))
-            gamma_menu.addAction("2.4", lambda: self._set_project_gamma(2.4))
-            for plabel, pattr in [
-                ("Linearize Working Space", "linearize_working_space"),
-                ("Compensate Scene Referred", "compensate_scene_referred"),
-            ]:
-                act = settings_menu.addAction(plabel)
-                act.setCheckable(True)
-                act.setChecked(getattr(self._tools_project, pattr, False))
-                act.triggered.connect(
-                    lambda checked, a=pattr: setattr(self._tools_project, a, checked))
-            settings_menu.addAction("Edit Audio Sample Rate...",
-                                    self._edit_audio_sample_rate)
 
         if not menu.isEmpty():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -1383,74 +1463,73 @@ class ProjectPanel(QWidget):
             base = old_text[:arrow_idx] if arrow_idx >= 0 else old_text
             item.setText(0, f"{base}  \u2192 {new_path}")
             item.setToolTip(0, new_path)
+            item.setForeground(0, COLOR_MODIFIED)
+            self.modified.emit()
 
-    def _rename_comp(self, item: QTreeWidgetItem, comp_id: int):
-        old_text = item.text(0)
-        # Strip icon prefix for editing
-        name_match = re.search(r'[^\s].*?(?=\s+\()', old_text)
-        old_name = name_match.group(0) if name_match else old_text
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Composition", "Name:", text=old_name)
-        if not ok or not new_name.strip():
+    def _open_comp_settings(self, item: QTreeWidgetItem, comp_id: int):
+        """Open CompSettingsDialog and apply changes."""
+        cd = self._comp_data.get(comp_id, {})
+        dlg = CompSettingsDialog(cd, self)
+        if dlg.exec() != QDialog.Accepted:
             return
-        new_name = new_name.strip()
-        self._tools_project.change_comp_name(comp_id, new_name)
-        # Update display — preserve icon and size suffix
-        prefix = old_text[:old_text.index(old_name)] if old_name in old_text else ""
-        suffix_match = re.search(r'\s+\(\d+.+\)$', old_text)
-        suffix = suffix_match.group(0) if suffix_match else ""
-        item.setText(0, f"{prefix}{new_name}{suffix}")
-
-    def _edit_comp_dimensions(self, comp_id: int):
-        text, ok = QInputDialog.getText(
-            self, "Edit Dimensions", "Width x Height (e.g. 1920x1080):")
-        if not ok or not text.strip():
+        changes = dlg.get_changes()
+        if not changes:
             return
-        m = re.match(r'(\d+)\s*[x\u00d7,]\s*(\d+)', text.strip())
-        if not m:
-            return
-        self._tools_project.change_comp_dimensions(
-            comp_id, int(m.group(1)), int(m.group(2)))
-
-    def _edit_comp_framerate(self, comp_id: int):
-        text, ok = QInputDialog.getText(
-            self, "Edit Frame Rate", "Frame rate (fps):")
-        if not ok or not text.strip():
-            return
-        try:
-            fps = float(text.strip())
-        except ValueError:
-            return
-        self._tools_project.change_comp_framerate(comp_id, fps)
-
-    def _edit_comp_duration(self, comp_id: int):
-        text, ok = QInputDialog.getText(
-            self, "Edit Duration", "Duration (seconds):")
-        if not ok or not text.strip():
-            return
-        try:
-            dur = float(text.strip())
-        except ValueError:
-            return
-        self._tools_project.change_comp_duration(comp_id, dur)
-
-    def _edit_comp_bgcolor(self, comp_id: int):
-        text, ok = QInputDialog.getText(
-            self, "Edit Background Color",
-            "RGB (0-255), e.g. 0,0,0 or #000000:")
-        if not ok or not text.strip():
-            return
-        text = text.strip()
-        if text.startswith("#") and len(text) >= 7:
-            r = int(text[1:3], 16)
-            g = int(text[3:5], 16)
-            b = int(text[5:7], 16)
-        else:
-            nums = re.findall(r'\d+', text)
-            if len(nums) < 3:
-                return
-            r, g, b = int(nums[0]), int(nums[1]), int(nums[2])
-        self._tools_project.change_comp_bgcolor(comp_id, r, g, b)
+        tp = self._tools_project
+        # Extract current name for rebuilding node text
+        cur_name = cd.get("name", "")
+        cur_w, cur_h = cd.get("width", 0), cd.get("height", 0)
+        if "name" in changes:
+            cur_name = changes["name"]
+            tp.change_comp_name(comp_id, cur_name)
+        if "dimensions" in changes:
+            cur_w, cur_h = changes["dimensions"]
+            tp.change_comp_dimensions(comp_id, cur_w, cur_h)
+        if "pixelAspect" in changes:
+            tp.change_comp_pixel_aspect(comp_id, changes["pixelAspect"])
+        if "framerate" in changes:
+            tp.change_comp_framerate(comp_id, changes["framerate"])
+            cd["framerate"] = changes["framerate"]
+        if "duration" in changes:
+            tp.change_comp_duration(comp_id, changes["duration"])
+            cd["duration"] = changes["duration"]
+        if "displayStartTime" in changes:
+            tp.change_comp_display_start_time(
+                comp_id, changes["displayStartTime"])
+        if "bgColor" in changes:
+            r, g, b = changes["bgColor"]
+            tp.change_comp_bgcolor(comp_id, r, g, b)
+        if "dropFrame" in changes:
+            tp.change_comp_drop_frame(comp_id, changes["dropFrame"])
+        if "shutterAngle" in changes:
+            tp.change_comp_shutter_angle(comp_id, changes["shutterAngle"])
+        if "shutterPhase" in changes:
+            tp.change_comp_shutter_phase(comp_id, changes["shutterPhase"])
+        if "mbSamples" in changes:
+            spf, asl = changes["mbSamples"]
+            tp.change_comp_motion_blur_samples(comp_id, spf, asl)
+        if "workAreaStart" in changes:
+            tp.change_comp_work_area_start(comp_id, changes["workAreaStart"])
+            cd["inTime"] = changes["workAreaStart"]
+        if "workAreaEnd" in changes:
+            tp.change_comp_work_area_end(comp_id, changes["workAreaEnd"])
+            cd["outTime"] = changes["workAreaEnd"]
+        # Comp flags
+        for key in list(changes):
+            if key.startswith("flag_"):
+                flag_key = key[5:]
+                if flag_key == "drop_frame":
+                    tp.change_comp_drop_frame(comp_id, changes[key])
+                else:
+                    tp.change_comp_flag(comp_id, flag_key, changes[key])
+        # Update tree node text with new name / dimensions
+        cd["name"] = cur_name
+        cd["width"] = cur_w
+        cd["height"] = cur_h
+        item.setText(0, f"\U0001f3ac {cur_name}  ({cur_w}\u00d7{cur_h})")
+        item.setForeground(0, COLOR_MODIFIED)
+        self.comp_modified.emit(comp_id, changes)
+        self.modified.emit()
 
     def _get_comp_flag(self, comp_id: int, flag_key: str) -> bool:
         cd = self._comp_data.get(comp_id, {})
@@ -1465,115 +1544,7 @@ class ProjectPanel(QWidget):
             self._tools_project.change_comp_drop_frame(comp_id, value)
         else:
             self._tools_project.change_comp_flag(comp_id, flag_key, value)
-
-    def _edit_comp_work_area(self, comp_id: int):
-        cd = self._comp_data.get(comp_id, {})
-        cur_start = cd.get("inTime", 0)
-        cur_end = cd.get("outTime", 0)
-        text, ok = QInputDialog.getText(
-            self, "Edit Work Area",
-            "start, duration (seconds):",
-            text=f"{cur_start}, {cur_end - cur_start}")
-        if not ok or not text.strip():
-            return
-        nums = re.findall(r'[\d.]+', text.strip())
-        if len(nums) < 2:
-            return
-        try:
-            start, dur = float(nums[0]), float(nums[1])
-        except ValueError:
-            return
-        self._tools_project.change_comp_work_area_start(comp_id, start)
-        self._tools_project.change_comp_work_area_end(comp_id, start + dur)
-
-    def _edit_comp_shutter(self, comp_id: int):
-        cd = self._comp_data.get(comp_id, {})
-        cur_angle = cd.get("shutterAngle", 0)
-        cur_phase = cd.get("shutterPhase", 0)
-        text, ok = QInputDialog.getText(
-            self, "Edit Shutter",
-            "angle, phase (e.g. 180, -90):",
-            text=f"{cur_angle}, {cur_phase}")
-        if not ok or not text.strip():
-            return
-        nums = re.findall(r'-?\d+', text.strip())
-        if len(nums) < 2:
-            return
-        try:
-            angle, phase = int(nums[0]), int(nums[1])
-        except ValueError:
-            return
-        self._tools_project.change_comp_shutter_angle(comp_id, angle)
-        self._tools_project.change_comp_shutter_phase(comp_id, phase)
-
-    def _edit_comp_mb_samples(self, comp_id: int):
-        cd = self._comp_data.get(comp_id, {})
-        cur_spf = cd.get("motionBlurSamplesPerFrame", 16)
-        cur_lim = cd.get("motionBlurAdaptiveSampleLimit", 128)
-        text, ok = QInputDialog.getText(
-            self, "Edit Motion Blur Samples",
-            "samples_per_frame, adaptive_limit:",
-            text=f"{cur_spf}, {cur_lim}")
-        if not ok or not text.strip():
-            return
-        nums = re.findall(r'\d+', text.strip())
-        if len(nums) < 2:
-            return
-        try:
-            spf, lim = int(nums[0]), int(nums[1])
-        except ValueError:
-            return
-        self._tools_project.change_comp_motion_blur_samples(comp_id, spf, lim)
-
-    def _edit_comp_pixel_aspect(self, comp_id: int):
-        cd = self._comp_data.get(comp_id, {})
-        cur = cd.get("pixelAspect", 1.0)
-        text, ok = QInputDialog.getText(
-            self, "Edit Pixel Aspect Ratio",
-            "Ratio (e.g. 1.0):",
-            text=str(cur))
-        if not ok or not text.strip():
-            return
-        try:
-            ratio = float(text.strip())
-        except ValueError:
-            return
-        self._tools_project.change_comp_pixel_aspect(comp_id, ratio)
-
-    def _edit_comp_display_start(self, comp_id: int):
-        cd = self._comp_data.get(comp_id, {})
-        cur = cd.get("displayStartTime", 0.0)
-        text, ok = QInputDialog.getText(
-            self, "Edit Display Start Time",
-            "Start time (seconds):",
-            text=str(cur))
-        if not ok or not text.strip():
-            return
-        try:
-            t = float(text.strip())
-        except ValueError:
-            return
-        self._tools_project.change_comp_display_start_time(comp_id, t)
-
-    def _set_project_bpc(self, bits: int):
-        self._tools_project.bits_per_channel = bits
-
-    def _set_project_gamma(self, gamma: float):
-        self._tools_project.working_gamma = gamma
-
-    def _edit_audio_sample_rate(self):
-        cur = getattr(self._tools_project, 'audio_sample_rate', 48000.0)
-        text, ok = QInputDialog.getText(
-            self, "Edit Audio Sample Rate",
-            "Sample rate (Hz):",
-            text=str(cur))
-        if not ok or not text.strip():
-            return
-        try:
-            rate = float(text.strip())
-        except ValueError:
-            return
-        self._tools_project.audio_sample_rate = rate
+        self.modified.emit()
 
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
         comp_id = item.data(0, Qt.UserRole)

@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
+    QApplication, QDialog, QFileDialog, QLabel, QMainWindow, QMessageBox,
     QProgressDialog, QSplitter, QStatusBar, QTabWidget,
 )
 
@@ -27,6 +27,8 @@ class MainWindow(QMainWindow):
         self._tools_project: ToolsProject | None = None
         self._source_path: Path | None = None
         self._comp_tab_map: dict[int, int] = {}
+        self._dirty = False
+        self._filename = ""
 
         self._setup_ui()
         self._setup_menu()
@@ -39,6 +41,8 @@ class MainWindow(QMainWindow):
         self.project_panel.setMinimumWidth(250)
         self.project_panel.setMaximumWidth(450)
         self.project_panel.comp_selected.connect(self._switch_to_comp)
+        self.project_panel.modified.connect(self._mark_dirty)
+        self.project_panel.comp_modified.connect(self._on_comp_modified)
         splitter.addWidget(self.project_panel)
 
         self.tab_widget = QTabWidget()
@@ -91,6 +95,14 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        edit_menu = menubar.addMenu("Edit")
+
+        self._project_settings_action = QAction("Project Settings...", self)
+        self._project_settings_action.setEnabled(False)
+        self._project_settings_action.triggered.connect(
+            self._open_project_settings)
+        edit_menu.addAction(self._project_settings_action)
 
         view_menu = menubar.addMenu("View")
 
@@ -162,10 +174,12 @@ class MainWindow(QMainWindow):
         if not data:
             return
 
+        self._filename = filename
+        self._dirty = False
         self.setWindowTitle(f"AEP Viewer \u2014 {filename}")
-        self._save_action.setEnabled(
-            self._tools_project is not None and self._tools_project.writable
-        )
+        writable = self._tools_project is not None and self._tools_project.writable
+        self._save_action.setEnabled(writable)
+        self._project_settings_action.setEnabled(writable)
         self.tab_widget.clear()
         self._comp_tab_map.clear()
 
@@ -177,6 +191,7 @@ class MainWindow(QMainWindow):
             widget = CompWidget(comp, assets=assets,
                                 tools_project=self._tools_project)
             widget.precomp_requested.connect(self._switch_to_comp)
+            widget.modified.connect(self._mark_dirty)
             name = comp.get("name", f"Comp {comp.get('id', '?')}")
             idx = self.tab_widget.addTab(widget, name)
             self._comp_tab_map[comp.get("id", 0)] = idx
@@ -215,6 +230,40 @@ class MainWindow(QMainWindow):
             parts.append("Beta")
         return " ".join(parts)
 
+    def _mark_dirty(self):
+        if not self._dirty:
+            self._dirty = True
+            self.setWindowTitle(f"AEP Viewer \u2014 *{self._filename}")
+
+    def _on_comp_modified(self, comp_id: int, changes: dict):
+        """Update the CompWidget and tab text when comp settings change."""
+        idx = self._comp_tab_map.get(comp_id)
+        if idx is None:
+            return
+        widget = self.tab_widget.widget(idx)
+        if not isinstance(widget, CompWidget):
+            return
+        c = widget.comp
+        if "name" in changes:
+            c["name"] = changes["name"]
+            self.tab_widget.setTabText(idx, changes["name"])
+        if "dimensions" in changes:
+            c["width"], c["height"] = changes["dimensions"]
+        if "framerate" in changes:
+            c["framerate"] = changes["framerate"]
+        if "duration" in changes:
+            c["duration"] = changes["duration"]
+        if "workAreaStart" in changes:
+            c["inTime"] = changes["workAreaStart"]
+        if "workAreaEnd" in changes:
+            c["outTime"] = changes["workAreaEnd"]
+        if "pixelAspect" in changes:
+            c["pixelAspect"] = changes["pixelAspect"]
+        if "bgColor" in changes:
+            r, g, b = changes["bgColor"]
+            c["bgColor"] = {"r": r, "g": g, "b": b}
+        widget._update_info_bar()
+
     def _switch_to_comp(self, comp_id: int):
         idx = self._comp_tab_map.get(comp_id)
         if idx is not None:
@@ -230,8 +279,23 @@ class MainWindow(QMainWindow):
             try:
                 self._tools_project.save(path)
                 self.status.showMessage(f"  Saved to {path}", 5000)
+                reply = QMessageBox.question(
+                    self, "Save Complete",
+                    f"Saved to {path}.\nReload this file?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                if reply == QMessageBox.Yes:
+                    self._load_file(Path(path))
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
+
+    def _open_project_settings(self):
+        if not self._tools_project or not self._tools_project.writable:
+            return
+        from .dialogs import ProjectSettingsDialog
+        dlg = ProjectSettingsDialog(self._tools_project, self)
+        if dlg.exec() == QDialog.Accepted and dlg.has_changes():
+            dlg.apply_changes()
+            self._mark_dirty()
 
     def _export_json(self):
         if not self._project_data:

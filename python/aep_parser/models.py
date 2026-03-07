@@ -469,6 +469,7 @@ class Layer:
             "inTime": self.in_time,
             "outTime": self.out_time,
             "startTime": self.start_time,
+            "quality": self.quality,
         }
         if self.time_stretch != 1.0:
             d["timeStretch"] = self.time_stretch
