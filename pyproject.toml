@@ -3,9 +3,9 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "aep-parser"
+name = "aep-tools"
 version = "0.1.0"
-description = "Parse After Effects project files (.aep/.aepx) and output structured JSON"
+description = "Parse and modify After Effects project files (.aep/.aepx)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
