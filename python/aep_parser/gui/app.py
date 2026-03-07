@@ -204,8 +204,16 @@ class MainWindow(QMainWindow):
         """Read AE version string from the project API."""
         if not self._tools_project:
             return None
-        ver = self._tools_project.ae_version
-        return f"AE {ver}" if ver else None
+        info = self._tools_project.ae_version_info
+        if not info:
+            return None
+        parts = [f"AE {info['version']}"]
+        if info["build"]:
+            parts[0] += f"x{info['build']}"
+        parts.append(info["os"])
+        if info["beta"]:
+            parts.append("Beta")
+        return " ".join(parts)
 
     def _switch_to_comp(self, comp_id: int):
         idx = self._comp_tab_map.get(comp_id)
