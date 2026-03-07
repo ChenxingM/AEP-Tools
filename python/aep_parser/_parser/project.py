@@ -81,7 +81,7 @@ class ProjectParser:
         self._layer_prop_key_index[key] = count + 1
         return f"{key} {count}"
 
-    # ── Top-level ────────────────────────────────────────────────────────
+    # Top-level
 
     def parse_project(self, root_chunk: Chunk) -> Project:
         project = Project()
@@ -115,7 +115,7 @@ class ProjectParser:
 
         return project
 
-    # ── Render Queue ──────────────────────────────────────────────────────
+    # Render Queue
 
     def _parse_render_queue(self, lrdr_chunk: Chunk, project: Project) -> None:
         cl = lrdr_chunk.list
@@ -276,7 +276,7 @@ class ProjectParser:
 
         return modules
 
-    # ── Folder / Items ───────────────────────────────────────────────────
+    # Folder / Items
 
     def _parse_folder(self, chunk: Chunk, folder: Folder, project: Project) -> None:
         cl = chunk.list
@@ -327,7 +327,7 @@ class ProjectParser:
                 if asset is not None:
                     folder.items.append(asset)
 
-    # ── Assets ───────────────────────────────────────────────────────────
+    # Assets
 
     def _parse_asset(self, asset_id: int, pin_chunk: Chunk,
                      project: Project) -> ImageAsset | SolidAsset | None:
@@ -393,7 +393,7 @@ class ProjectParser:
     def _solid_color_val(v: float) -> float:
         return v if v == 255 else v * 255
 
-    # ── Composition ──────────────────────────────────────────────────────
+    # Composition
 
     def _parse_composition(self, comp: Composition, cl: ChunkList,
                            project: Project) -> None:
@@ -449,7 +449,7 @@ class ProjectParser:
             elif child.name == "SecL":
                 comp.markers = self._parse_layer(child)
 
-    # ── Layer ────────────────────────────────────────────────────────────
+    # Layer
 
     def _parse_layer(self, chunk: Chunk) -> Layer:
         layer = Layer()
@@ -517,7 +517,7 @@ class ProjectParser:
 
         return layer
 
-    # ── Property Group ───────────────────────────────────────────────────
+    # Property Group
 
     def _parse_property_group(self, cl: ChunkList, group: PropertyGroup,
                               key_prefix: str = "") -> None:
@@ -670,7 +670,7 @@ class ProjectParser:
             return self._parse_animated_text(chunk.list)
         return None
 
-    # ── Animated Property ────────────────────────────────────────────────
+    # Animated Property
 
     def _parse_animated_property(self, cl: ChunkList,
                                  extra_values: list) -> AnimatedProperty:
@@ -871,7 +871,7 @@ class ProjectParser:
 
         return kf
 
-    # ── Animated Shape ───────────────────────────────────────────────────
+    # Animated Shape
 
     def _parse_animated_shape(self, cl: ChunkList) -> AnimatedProperty:
         omks, tdbs = cl.find_multiple(["omks", "tdbs"])
@@ -909,7 +909,7 @@ class ProjectParser:
 
         return shape
 
-    # ── Animated Gradient ────────────────────────────────────────────────
+    # Animated Gradient
 
     def _parse_animated_gradient(self, cl: ChunkList) -> AnimatedProperty:
         gcky, tdbs = cl.find_multiple(["GCky", "tdbs"])
@@ -970,7 +970,7 @@ class ProjectParser:
             return elem.text or ""
         return None
 
-    # ── Animated Orientation ─────────────────────────────────────────────
+    # Animated Orientation
 
     def _parse_animated_orientation(self, cl: ChunkList) -> AnimatedProperty:
         otky, tdbs = cl.find_multiple(["otky", "tdbs"])
@@ -981,7 +981,7 @@ class ProjectParser:
                                        r.read_float64()))
         return self._parse_animated_property(tdbs.list, orientations)
 
-    # ── Animated Marker ──────────────────────────────────────────────────
+    # Animated Marker
 
     def _parse_animated_marker(self, cl: ChunkList) -> AnimatedProperty:
         mrky, tdbs = cl.find_multiple(["mrky", "tdbs"])
@@ -1007,7 +1007,7 @@ class ProjectParser:
         marker.label_color = r.read_uint(1)
         return marker
 
-    # ── Animated Text ────────────────────────────────────────────────────
+    # Animated Text
 
     def _parse_animated_text(self, cl: ChunkList) -> TextProperty:
         btdk, tdbs = cl.find_multiple(["btdk", "tdbs"])
@@ -1159,7 +1159,7 @@ class ProjectParser:
         # result should be [alpha, r, g, b] with r,g,b in 0-1 range
         return Color(result[1] * 255, result[2] * 255, result[3] * 255, result[0])
 
-    # ── Effects ──────────────────────────────────────────────────────────
+    # Effects
 
     def _parse_effects(self, effect_chunks: list[Chunk],
                        project: Project) -> None:

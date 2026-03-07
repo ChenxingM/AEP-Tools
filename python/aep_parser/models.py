@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-# ── Primitive types ──────────────────────────────────────────────────────────
+# Primitive types
 
 @dataclass
 class Vector:
@@ -44,7 +44,7 @@ class LayerRef:
         return {"layerId": self.layer_id, "layerSource": self.layer_source}
 
 
-# ── Gradient ─────────────────────────────────────────────────────────────────
+# Gradient
 
 @dataclass
 class GradientStop:
@@ -69,7 +69,7 @@ class Gradient:
         }
 
 
-# ── Bezier shape ─────────────────────────────────────────────────────────────
+# Bezier shape
 
 @dataclass
 class BezierShape:
@@ -89,7 +89,7 @@ class BezierShape:
         }
 
 
-# ── Keyframe ─────────────────────────────────────────────────────────────────
+# Keyframe
 
 TRANSITION_TYPES = {1: "linear", 2: "bezier", 3: "hold"}
 BEZIER_MODES = {0: "normal", 1: "continuous", 2: "auto"}
@@ -131,7 +131,7 @@ class Keyframe:
         return d
 
 
-# ── Properties ───────────────────────────────────────────────────────────────
+# Properties
 
 PROPERTY_TYPE_NAMES = {
     0: "color", 1: "scalar", 2: "spatial",
@@ -202,7 +202,7 @@ class PropertyGroup:
         return d
 
 
-# ── Mask ─────────────────────────────────────────────────────────────────────
+# Mask
 
 MASK_MODES = {0: "none", 1: "add", 2: "subtract", 3: "intersect",
               4: "darken", 5: "lighten", 6: "difference"}
@@ -230,7 +230,7 @@ class MaskData:
         return d
 
 
-# ── Text ─────────────────────────────────────────────────────────────────────
+# Text
 
 @dataclass
 class Font:
@@ -330,7 +330,7 @@ class TextProperty:
         }
 
 
-# ── Effects ──────────────────────────────────────────────────────────────────
+# Effects
 
 @dataclass
 class EffectParameter:
@@ -374,7 +374,7 @@ class EffectInstance:
         return {"name": self.name, "parameters": self.parameters.to_dict()}
 
 
-# ── Marker ───────────────────────────────────────────────────────────────────
+# Marker
 
 @dataclass
 class Marker:
@@ -390,7 +390,7 @@ class Marker:
         return d
 
 
-# ── Layer ────────────────────────────────────────────────────────────────────
+# Layer
 
 LAYER_TYPES = {0: "asset", 1: "light", 2: "camera", 3: "text", 4: "shape"}
 
@@ -483,7 +483,7 @@ class Layer:
         return d
 
 
-# ── Composition ──────────────────────────────────────────────────────────────
+# Composition
 
 @dataclass
 class Composition:
@@ -519,7 +519,7 @@ class Composition:
         return d
 
 
-# ── Assets ───────────────────────────────────────────────────────────────────
+# Assets
 
 @dataclass
 class SequenceInfo:
@@ -563,7 +563,7 @@ class SolidAsset:
                 "color": self.color.to_dict(), "width": self.width, "height": self.height}
 
 
-# ── Render Queue ─────────────────────────────────────────────────────────────
+# Render Queue
 
 OUTPUT_FORMATS = {
     "MooV": "QuickTime",
@@ -644,7 +644,7 @@ class RenderQueueItem:
         return d
 
 
-# ── Folder / Project ─────────────────────────────────────────────────────────
+# Folder / Project
 
 @dataclass
 class Folder:
@@ -682,7 +682,7 @@ class Project:
         return d
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# Helpers
 
 def _camel(s: str) -> str:
     parts = s.split("_")

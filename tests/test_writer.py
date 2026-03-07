@@ -25,7 +25,7 @@ from aep_tools._writer import (
 )
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# Helpers
 
 
 def _make_idta(item_type: int, item_id: int, big_endian: bool = True) -> bytes:
@@ -178,7 +178,7 @@ def _build_test_chunk_tree(big_endian: bool = True) -> Chunk:
     return root
 
 
-# ── Tests: Chunk Tree Navigation ────────────────────────────────────────────
+# Tests: Chunk Tree Navigation
 
 
 class TestFindCompChunklist:
@@ -238,7 +238,7 @@ class TestFindPropertyChunk:
         assert prop is None
 
 
-# ── Tests: Modification ─────────────────────────────────────────────────────
+# Tests: Modification
 
 
 class TestSetLayerName:
@@ -340,7 +340,7 @@ class TestSetCompName:
         assert result is False
 
 
-# ── Tests: Property setters (assignment syntax) ─────────────────────────────
+# Tests: Property setters (assignment syntax)
 
 
 class TestPropertySetters:
@@ -474,7 +474,7 @@ class TestPropertySetters:
         assert prop.value == [100.0, 200.0]
 
 
-# ── Tests: Serialization ────────────────────────────────────────────────────
+# Tests: Serialization
 
 
 class TestSerialize:
@@ -528,7 +528,7 @@ class TestSerialize:
         assert data[8:12] == b"Egg!"
 
 
-# ── Tests: btdk roundtrip ───────────────────────────────────────────────────
+# Tests: btdk roundtrip
 
 
 class TestBtdkRoundtrip:
@@ -551,7 +551,7 @@ class TestBtdkRoundtrip:
         assert data[idx+12:idx+12+6] == btdk_data
 
 
-# ── Tests: Container chunks (tdsn) ──────────────────────────────────────────
+# Tests: Container chunks (tdsn)
 
 
 class TestContainerChunks:
@@ -574,7 +574,7 @@ class TestContainerChunks:
         assert data[idx+8:idx+12] == b"Utf8"
 
 
-# ── Tests: Layer flag / field writers ──────────────────────────────────────
+# Tests: Layer flag / field writers
 
 
 class TestLayerFlags:
@@ -697,7 +697,7 @@ class TestLayerTimeFields:
         assert not set_layer_time_field(root, 100, 10, 'bogus', 1.0, True)
 
 
-# ── Tests: Comp field writers ──────────────────────────────────────────────
+# Tests: Comp field writers
 
 
 class TestCompFields:
@@ -745,7 +745,7 @@ class TestCompFields:
         assert not set_comp_dimensions(root, 999, 100, 100, True)
 
 
-# ── Tests: Layer/Comp property setters (high-level) ───────────────────────
+# Tests: Layer/Comp property setters (high-level)
 
 
 class TestLayerPropertySetters:

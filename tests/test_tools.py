@@ -49,7 +49,7 @@ from aep_tools import (
 )
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# Helpers
 
 
 def _make_animated_prop(value=None, keyframes=None, match_name="", prop_type=3,
@@ -144,7 +144,7 @@ def _make_project_model(compositions=None, assets=None, render_queue=None):
     )
 
 
-# ── Property tests ──────────────────────────────────────────────────────────
+# Property tests
 
 
 class TestProperty:
@@ -320,7 +320,7 @@ class TestProperty:
         assert prop.key_in_spatial_tangent(1) is None
 
 
-# ── PropertyGroup tests ─────────────────────────────────────────────────────
+# PropertyGroup tests
 
 
 class TestPropertyGroup:
@@ -419,7 +419,7 @@ class TestPropertyGroup:
         assert group.property("ADBE Nonexistent") is None
 
 
-# ── MarkerProperty tests ───────────────────────────────────────────────────
+# MarkerProperty tests
 
 
 class TestMarkerProperty:
@@ -466,7 +466,7 @@ class TestMarkerProperty:
             mp.nearest_key_index(0.0)
 
 
-# ── TextSourceProperty tests ───────────────────────────────────────────────
+# TextSourceProperty tests
 
 
 class TestTextSourceProperty:
@@ -504,7 +504,7 @@ class TestTextSourceProperty:
             tsp.key_value(2)
 
 
-# ── Effect tests ────────────────────────────────────────────────────────────
+# Effect tests
 
 
 class TestEffect:
@@ -556,7 +556,7 @@ class TestEffect:
             eff("nope")
 
 
-# ── Mask tests ──────────────────────────────────────────────────────────────
+# Mask tests
 
 
 class TestMask:
@@ -588,7 +588,7 @@ class TestMask:
         assert m.mask_expansion is None
 
 
-# ── Layer tests ─────────────────────────────────────────────────────────────
+# Layer tests
 
 
 class TestLayer:
@@ -692,7 +692,7 @@ class TestLayer:
             layer("Nonexistent")
 
 
-# ── Layer subclass factory tests ────────────────────────────────────────────
+# Layer subclass factory tests
 
 
 class TestLayerSubclasses:
@@ -750,7 +750,7 @@ class TestLayerSubclasses:
         assert layer.source_text.fonts == ["Helvetica"]
 
 
-# ── CompItem tests ──────────────────────────────────────────────────────────
+# CompItem tests
 
 
 class TestCompItem:
@@ -844,7 +844,7 @@ class TestCompItem:
         assert mv.comment == "Start"
 
 
-# ── Project tests ───────────────────────────────────────────────────────────
+# Project tests
 
 
 class TestProject:
@@ -896,7 +896,7 @@ class TestProject:
         assert "Project" in repr(proj)
 
 
-# ── Layer parent lookup ─────────────────────────────────────────────────────
+# Layer parent lookup
 
 
 class TestLayerParent:
@@ -917,7 +917,7 @@ class TestLayerParent:
         assert layer.parent is None
 
 
-# ── Chaining integration test ──────────────────────────────────────────────
+# Chaining integration test
 
 
 class TestChaining:

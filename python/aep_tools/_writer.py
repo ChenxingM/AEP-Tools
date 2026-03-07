@@ -881,7 +881,7 @@ def set_keyframe_ease(root: Chunk, comp_id: int, layer_id: int,
     return True
 
 
-# ── ldta / cdta field writers ──────────────────────────────────────────────
+# ldta / cdta field writers
 
 
 # Flag name → (byte_index within 4-byte flags field, bit_index)
@@ -1026,7 +1026,7 @@ def set_layer_time_field(root: Chunk, comp_id: int, layer_id: int,
     return True
 
 
-# ── cdta helpers ──────────────────────────────────────────────────────────
+# cdta helpers
 
 
 def _find_cdta(root: Chunk, comp_id: int, big_endian: bool) -> Chunk | None:
@@ -1107,7 +1107,7 @@ def set_comp_duration(root: Chunk, comp_id: int, duration: float,
     return True
 
 
-# ── Pre-save fixup ─────────────────────────────────────────────────────
+# Pre-save fixup
 
 
 # Properties that always need 3 components regardless of 2D/3D state.

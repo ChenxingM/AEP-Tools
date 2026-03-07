@@ -33,7 +33,7 @@ def main():
     print(f"合成数: {len(proj.compositions)}")
     print()
 
-    # ── 选择第一个合成 ──
+    # 选择第一个合成
     comp = proj.comp(1)
     if comp is None:
         print("没有找到合成")
@@ -43,7 +43,7 @@ def main():
     print(f"  原始: {comp.width}x{comp.height} @ {comp.frame_rate}fps, "
           f"时长={comp.duration}s, 背景={comp.bg_color}")
 
-    # ── CompItem 可写属性 ──
+    # CompItem 可写属性
     old_comp = {
         "name": comp.name,
         "width": comp.width,
@@ -56,8 +56,7 @@ def main():
     comp.name = comp.name + "_MODIFIED"
     comp.width = 1280
     comp.height = 720
-    # 注意: frame_rate 和 duration 在 cdta 中共享时间基准。
-    # 先改帧率再改时长是安全的，但值会有微小舍入误差。
+
     comp.frame_rate = 24.0
     comp.duration = 10.0
     comp.bg_color = [128, 64, 32]
@@ -67,7 +66,7 @@ def main():
     print(f"  名称: {old_comp['name']} -> {comp.name}")
     print()
 
-    # ── 选择第一个图层 ──
+    # 选择第一个图层
     if comp.num_layers == 0:
         print("合成没有图层，跳过图层测试")
         proj.save(output_path)
@@ -77,12 +76,12 @@ def main():
     layer = comp.layer(1)
     print(f"=== 图层 1: {layer.name} ===")
 
-    # ── Layer 可写属性: 名称 ──
+    # Layer 可写属性: 名称
     old_name = layer.name
     layer.name = "MODIFIED_LAYER"
     print(f"  名称: {old_name} -> {layer.name}")
 
-    # ── Layer 可写属性: 标志 ──
+    # Layer 可写属性: 标志
     # 注意: three_d_layer 和 null_layer 有结构性副作用，不能随意翻转。
     #   three_d_layer False→True: AE 要求 Anchor Point / Position 变为 3 分量，
     #   但 tdb4 元数据仍声明 2 分量 → AE 报错 "dimension 2, expected 3"。
@@ -144,7 +143,7 @@ def main():
     print(f"    three_d_layer: {layer.three_d_layer}")
     print()
 
-    # ── Layer 可写属性: 值 ──
+    # Layer 可写属性: 值
     old_label = layer.label
     old_blend = layer.blending_mode
     old_matte = layer.track_matte_type
@@ -161,7 +160,7 @@ def main():
     print(f"  quality: {old_quality} -> {layer.quality}")
     print()
 
-    # ── Layer 可写属性: 时间 ──
+    # Layer 可写属性: 时间
     old_in = layer.in_point
     old_out = layer.out_point
     old_start = layer.start_time
@@ -178,7 +177,7 @@ def main():
     print(f"  stretch: {old_stretch} -> {layer.stretch}")
     print()
 
-    # ── Property.value (Transform) ──
+    # Property.value (Transform)
     print("  Transform 属性:")
     if layer.position is not None:
         old_pos = layer.position.value
@@ -220,7 +219,7 @@ def main():
 
     print()
 
-    # ── 关键帧写入 ──
+    # 关键帧写入
     prop = layer.position or layer.opacity or layer.scale
     if prop is not None and prop.num_keys > 0:
         print(f"  关键帧测试 ({prop.match_name}, {prop.num_keys} keys):")
@@ -258,7 +257,7 @@ def main():
         print("  (没有关键帧，跳过关键帧测试)")
         print()
 
-    # ── FootageItem.file ──
+    # FootageItem.file
     print("=== 素材路径 ===")
     for i in range(1, proj.num_items + 1):
         item = proj.item(i)
@@ -271,12 +270,12 @@ def main():
         print("  (没有找到 footage 素材)")
     print()
 
-    # ── 保存 ──
+    # 保存
     proj.save(output_path)
     print(f"已保存: {output_path}")
     print()
 
-    # ── 重新读取验证 ──
+    # 重新读取验证
     print("=" * 60)
     print("重新读取验证...")
     print("=" * 60)

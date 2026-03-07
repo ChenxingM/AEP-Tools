@@ -85,7 +85,7 @@ class Layer:
     def containing_comp(self) -> CompItem | None:
         return self._containing_comp
 
-    # ── Write helpers ──
+    # Write helpers
 
     def _write_flag(self, model_attr: str, flag_name: str, value: bool) -> None:
         """Update a boolean flag on the model and in the chunk tree."""
