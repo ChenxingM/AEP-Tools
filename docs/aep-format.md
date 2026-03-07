@@ -226,33 +226,76 @@ AE version information is stored in two top-level chunks directly under the RIFX
 ```
 Offset  Size  Field           Type      Description
 ─────────────────────────────────────────────────────
-0       2     format_level    uint16    File format level (encodes AE major version)
-2       2     minor_version   uint16    AE minor version number
-4       4     version_id      uint32    Internal version identifier (same as svap)
+0       2     format_level    uint16    File format level
+2       2     format_sub      uint16    Format sub-version (NOT AE minor version)
+4       4     version_id      uint32    AE version identifier (same as svap)
 8       12    (reserved)      —         Timestamps, internal counters
 ```
-
-**AE major version:** `ae_major = format_level - 71`
-
-| format_level | AE Major Version |
-|-------------|-----------------|
-| 93 | AE 22 (CC 2022) |
-| 94 | AE 23 (CC 2023) |
-| 95 | AE 24 (CC 2024) |
-| 96 | AE 25 (CC 2025) |
-| 97 | AE 26 |
-
-**AE minor version:** `head[2:4]` is a uint16 that directly gives the minor version (reliable for AE 23+). For example, format_level=96 and minor_version=6 → AE 25.6.
 
 ### svap Chunk (4 bytes)
 
 ```
 Offset  Size  Field           Type      Description
 ─────────────────────────────────────────────────────
-0       4     version_id      uint32    Internal AE build identifier
+0       4     version_id      uint32    AE version identifier (same as head[4:8])
 ```
 
-The 4-byte `svap` value is identical to `head[4:8]`. It encodes an internal build number but does **not** directly map to the marketing patch version (e.g., the `.4` in 25.6.4 is not reliably extractable).
+### version_id Bit Field Encoding
+
+The `version_id` (svap 4 bytes = head[4:8]) encodes the full AE version as bit fields in a big-endian uint32:
+
+```
+Bit 31    30-26     25-22    21-19     18-15   14-11   10   9      8   7-0
+[rsv]  [maj_a 5b] [os 4b] [maj_b 3b] [minor] [patch] [r] [beta] [r] [build]
+```
+
+| Field | Bits | Description |
+|-------|------|-------------|
+| maj_a | 30-26 | High bits of major version (5 bits) |
+| os | 25-22 | OS code: 12=Windows, 13=macOS Intel, 14=macOS ARM |
+| maj_b | 21-19 | Low bits of major version (3 bits) |
+| minor | 18-15 | Minor version number (4 bits) |
+| patch | 14-11 | Patch version number (4 bits) |
+| beta | 9 | 0=beta, 1=release |
+| build | 7-0 | Build number (8 bits) |
+
+**AE major version:** `major = maj_a × 8 + maj_b`
+
+**Decoding example** (`0x0F0B2603` → AE 25.6.4):
+
+```
+0x0F0B2603 = 00001111 00001011 00100110 00000011
+
+maj_a  = 00011  = 3
+os     = 1100   = 12 (Windows)
+maj_b  = 001    = 1
+minor  = 0110   = 6
+patch  = 0100   = 4
+beta   = 1      (release)
+build  = 00000011 = 3
+
+major = 3 × 8 + 1 = 25  →  AE 25.6.4 build 3
+```
+
+### Known version_id Values
+
+| version_id | AE Version | OS |
+|---|---|---|
+| `0x0B3B0637` | 23.6.0 | Windows |
+| `0x0F000637` | 24.0.0 | Windows |
+| `0x0F098E03` | 25.3.1 | Windows |
+| `0x0F0A0656` | 25.4.0 | Windows |
+| `0x0F0A8604` | 25.5.0 | Windows |
+| `0x0F0B2603` | 25.6.4 | Windows |
+| `0x0F100643` | 26.0.0 | Windows |
+
+### format_level
+
+`head[0:2]` is the file format level. It increments when the binary format changes, but does **not** correspond 1:1 to AE major versions. Use `version_id` for accurate version detection.
+
+### head[2:4] (format_sub)
+
+`head[2:4]` is an internal format sub-version counter. It does **not** correspond to AE minor versions despite occasionally coincidental values. Do not use it for version detection.
 
 ### Hex Offsets for Manual Editing
 
@@ -260,12 +303,14 @@ In a typical AEP file:
 
 | Chunk | Offset | Size | Description |
 |-------|--------|------|-------------|
-| `svap` | 0x14 | 4 | `version_id` — last-save AE build identifier |
-| `head` format_level | 0x20 | 2 | uint16 — determines AE major version |
-| `head` minor_version | 0x22 | 2 | uint16 — AE minor version |
+| `svap` | 0x14 | 4 | `version_id` — AE version bit field |
+| `head` format_level | 0x20 | 2 | uint16 — file format level |
+| `head` format_sub | 0x22 | 2 | uint16 — format sub-version |
 | `head` version_id | 0x24 | 4 | Same value as svap |
 
 > **Note:** These offsets assume standard AEP layout. The `svap` chunk is the first child of the RIFX root, followed by `head`.
+>
+> **Credit:** Bit field encoding based on [forticheprod/aep_parser](https://github.com/forticheprod/aep_parser) and [tinogithub/aftereffects-version-check](https://github.com/tinogithub/aftereffects-version-check).
 
 ---
 
@@ -1289,19 +1334,25 @@ The parser defaults to big-endian for binary data within `bdata` attributes.
 
 | Value | Mode | Value | Mode |
 |-------|------|-------|------|
-| 1 | Normal | 17 | Hard Light |
-| 3 | Darken | 18 | Linear Light |
-| 4 | Multiply | 19 | Vivid Light |
-| 5 | Color Burn | 20 | Pin Light |
-| 6 | Linear Burn | 21 | Hard Mix |
-| 7 | Darker Color | 23 | Difference |
-| 9 | Lighten | 24 | Exclusion |
-| 10 | Screen | 26 | Hue |
-| 11 | Color Dodge | 27 | Saturation |
-| 12 | Linear Dodge (Add) | 28 | Color |
-| 13 | Lighter Color | 29 | Luminosity |
-| 15 | Overlay | | |
-| 16 | Soft Light | | |
+| 2 | Normal | 21 | Luminescent Premul |
+| 3 | Dissolve | 22 | Alpha Add |
+| 4 | Add | 23 | Classic Color Dodge |
+| 5 | Multiply | 24 | Classic Color Burn |
+| 6 | Screen | 25 | Exclusion |
+| 7 | Overlay | 26 | Difference |
+| 8 | Soft Light | 27 | Color Dodge |
+| 9 | Hard Light | 28 | Color Burn |
+| 10 | Darken | 29 | Linear Dodge (Add) |
+| 11 | Lighten | 30 | Linear Burn |
+| 12 | Classic Difference | 31 | Linear Light |
+| 13 | Hue | 32 | Vivid Light |
+| 14 | Saturation | 33 | Pin Light |
+| 15 | Color | 34 | Hard Mix |
+| 16 | Luminosity | 35 | Lighter Color |
+| 17 | Stencil Alpha | 36 | Darker Color |
+| 18 | Stencil Luma | 37 | Subtract |
+| 19 | Silhouette Alpha | 38 | Divide |
+| 20 | Silhouette Luma | | |
 
 ### Track Matte Modes
 

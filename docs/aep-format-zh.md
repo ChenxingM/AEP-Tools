@@ -226,33 +226,76 @@ AE 版本信息存储在 RIFX 根节点下的两个顶层数据块中。
 ```
 偏移量  大小  字段名          类型      说明
 ─────────────────────────────────────────────────────
-0       2     format_level    uint16    文件格式级别（编码 AE 主版本号）
-2       2     minor_version   uint16    AE 次版本号
-4       4     version_id      uint32    内部版本标识符（与 svap 相同）
+0       2     format_level    uint16    文件格式级别
+2       2     format_sub      uint16    格式子版本号（不是 AE 次版本号）
+4       4     version_id      uint32    AE 版本标识符（与 svap 相同）
 8       12    （保留）         —         时间戳、内部计数器
 ```
-
-**AE 主版本号：** `ae_major = format_level - 71`
-
-| format_level | AE 主版本 |
-|-------------|----------|
-| 93 | AE 22 (CC 2022) |
-| 94 | AE 23 (CC 2023) |
-| 95 | AE 24 (CC 2024) |
-| 96 | AE 25 (CC 2025) |
-| 97 | AE 26 |
-
-**AE 次版本号：** `head[2:4]` 是 uint16，直接给出次版本号（AE 23+ 可靠）。例如 format_level=96、minor_version=6 → AE 25.6。
 
 ### svap 数据块（4 字节）
 
 ```
 偏移量  大小  字段名          类型      说明
 ─────────────────────────────────────────────────────
-0       4     version_id      uint32    内部 AE 构建标识符
+0       4     version_id      uint32    AE 版本标识符（与 head[4:8] 相同）
 ```
 
-`svap` 的 4 字节值与 `head[4:8]` 相同。它编码了一个内部构建号，但**不能**直接映射到营销补丁版本号（例如 25.6.4 中的 `.4` 无法可靠提取）。
+### version_id 位域编码
+
+`version_id`（svap 4 字节 = head[4:8]）将完整 AE 版本编码为大端序 uint32 的位域：
+
+```
+Bit 31    30-26     25-22    21-19     18-15   14-11   10   9      8   7-0
+[保留]  [maj_a 5b] [os 4b] [maj_b 3b] [minor] [patch] [r] [beta] [r] [build]
+```
+
+| 字段 | 位 | 说明 |
+|------|-----|------|
+| maj_a | 30-26 | 主版本号高位（5 位） |
+| os | 25-22 | 操作系统代码：12=Windows, 13=macOS Intel, 14=macOS ARM |
+| maj_b | 21-19 | 主版本号低位（3 位） |
+| minor | 18-15 | 次版本号（4 位） |
+| patch | 14-11 | 补丁版本号（4 位） |
+| beta | 9 | 0=测试版, 1=正式版 |
+| build | 7-0 | 构建号（8 位） |
+
+**AE 主版本号：** `major = maj_a × 8 + maj_b`
+
+**解码示例**（`0x0F0B2603` → AE 25.6.4）：
+
+```
+0x0F0B2603 = 00001111 00001011 00100110 00000011
+
+maj_a  = 00011  = 3
+os     = 1100   = 12 (Windows)
+maj_b  = 001    = 1
+minor  = 0110   = 6
+patch  = 0100   = 4
+beta   = 1      （正式版）
+build  = 00000011 = 3
+
+major = 3 × 8 + 1 = 25  →  AE 25.6.4 build 3
+```
+
+### 已知 version_id 值
+
+| version_id | AE 版本 | 操作系统 |
+|---|---|---|
+| `0x0B3B0637` | 23.6.0 | Windows |
+| `0x0F000637` | 24.0.0 | Windows |
+| `0x0F098E03` | 25.3.1 | Windows |
+| `0x0F0A0656` | 25.4.0 | Windows |
+| `0x0F0A8604` | 25.5.0 | Windows |
+| `0x0F0B2603` | 25.6.4 | Windows |
+| `0x0F100643` | 26.0.0 | Windows |
+
+### format_level
+
+`head[0:2]` 是文件格式级别。它在二进制格式变更时递增，但**不**与 AE 主版本号一一对应。应使用 `version_id` 进行准确的版本检测。
+
+### head[2:4] (format_sub)
+
+`head[2:4]` 是内部格式子版本计数器。它**不**对应 AE 次版本号，尽管偶尔会出现巧合匹配。不应用于版本检测。
 
 ### 手动编辑的十六进制偏移量
 
@@ -260,12 +303,14 @@ AE 版本信息存储在 RIFX 根节点下的两个顶层数据块中。
 
 | 数据块 | 偏移量 | 大小 | 说明 |
 |--------|--------|------|------|
-| `svap` | 0x14 | 4 | `version_id` — 最后保存的 AE 构建标识符 |
-| `head` format_level | 0x20 | 2 | uint16 — 决定 AE 主版本号 |
-| `head` minor_version | 0x22 | 2 | uint16 — AE 次版本号 |
+| `svap` | 0x14 | 4 | `version_id` — AE 版本位域 |
+| `head` format_level | 0x20 | 2 | uint16 — 文件格式级别 |
+| `head` format_sub | 0x22 | 2 | uint16 — 格式子版本号 |
 | `head` version_id | 0x24 | 4 | 与 svap 相同的值 |
 
 > **注意：** 这些偏移量假设标准 AEP 文件布局。`svap` 数据块是 RIFX 根的第一个子块，后跟 `head`。
+>
+> **参考来源：** 位域编码基于 [forticheprod/aep_parser](https://github.com/forticheprod/aep_parser) 和 [tinogithub/aftereffects-version-check](https://github.com/tinogithub/aftereffects-version-check)。
 
 ---
 
@@ -1284,19 +1329,25 @@ AEPX 文件包含 `byteOrder` 属性或可从 XML 内容中检测。
 
 | 值 | 模式 | 值 | 模式 |
 |----|------|-----|------|
-| 1 | 正常 (Normal) | 17 | 强光 (Hard Light) |
-| 3 | 变暗 (Darken) | 18 | 线性光 (Linear Light) |
-| 4 | 正片叠底 (Multiply) | 19 | 亮光 (Vivid Light) |
-| 5 | 颜色加深 (Color Burn) | 20 | 点光 (Pin Light) |
-| 6 | 线性加深 (Linear Burn) | 21 | 实色混合 (Hard Mix) |
-| 7 | 深色 (Darker Color) | 23 | 差值 (Difference) |
-| 9 | 变亮 (Lighten) | 24 | 排除 (Exclusion) |
-| 10 | 滤色 (Screen) | 26 | 色相 (Hue) |
-| 11 | 颜色减淡 (Color Dodge) | 27 | 饱和度 (Saturation) |
-| 12 | 线性减淡/添加 (Linear Dodge) | 28 | 颜色 (Color) |
-| 13 | 浅色 (Lighter Color) | 29 | 明度 (Luminosity) |
-| 15 | 叠加 (Overlay) | | |
-| 16 | 柔光 (Soft Light) | | |
+| 2 | 正常 (Normal) | 21 | 发光预乘 (Luminescent Premul) |
+| 3 | 溶解 (Dissolve) | 22 | Alpha 添加 (Alpha Add) |
+| 4 | 添加 (Add) | 23 | 经典颜色减淡 (Classic Color Dodge) |
+| 5 | 正片叠底 (Multiply) | 24 | 经典颜色加深 (Classic Color Burn) |
+| 6 | 滤色 (Screen) | 25 | 排除 (Exclusion) |
+| 7 | 叠加 (Overlay) | 26 | 差值 (Difference) |
+| 8 | 柔光 (Soft Light) | 27 | 颜色减淡 (Color Dodge) |
+| 9 | 强光 (Hard Light) | 28 | 颜色加深 (Color Burn) |
+| 10 | 变暗 (Darken) | 29 | 线性减淡/添加 (Linear Dodge) |
+| 11 | 变亮 (Lighten) | 30 | 线性加深 (Linear Burn) |
+| 12 | 经典差值 (Classic Difference) | 31 | 线性光 (Linear Light) |
+| 13 | 色相 (Hue) | 32 | 亮光 (Vivid Light) |
+| 14 | 饱和度 (Saturation) | 33 | 点光 (Pin Light) |
+| 15 | 颜色 (Color) | 34 | 实色混合 (Hard Mix) |
+| 16 | 明度 (Luminosity) | 35 | 浅色 (Lighter Color) |
+| 17 | 蒙版 Alpha (Stencil Alpha) | 36 | 深色 (Darker Color) |
+| 18 | 蒙版亮度 (Stencil Luma) | 37 | 相减 (Subtract) |
+| 19 | 轮廓 Alpha (Silhouette Alpha) | 38 | 相除 (Divide) |
+| 20 | 轮廓亮度 (Silhouette Luma) | | |
 
 ### 轨道遮罩模式
 

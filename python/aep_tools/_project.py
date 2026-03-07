@@ -301,26 +301,61 @@ class Project:
 
     # Version info
 
-    @property
-    def ae_version(self) -> str | None:
-        """AE version that last saved this project (e.g. ``"25.6"``).
+    _OS_NAMES: dict[int, str] = {12: "Windows", 13: "macOS", 14: "macOS ARM"}
 
-        Derived from the ``head`` chunk: format level encodes the major
-        version and bytes 2-3 encode the minor version.
-        Returns ``None`` for ``.aepx`` files or if the header is missing.
+    def _decode_version_id(self) -> dict | None:
+        """Decode version_id bit fields from the ``head`` chunk.
+
+        Returns a dict with keys: major, minor, patch, build, os, os_code,
+        beta, version (formatted string), or ``None`` if unavailable.
         """
         if self._chunk_tree is None:
             return None
         try:
             head = self._chunk_tree.list.find_optional("head")
-            if not head or not isinstance(head.data, (bytes, bytearray)) or len(head.data) < 4:
+            if not head or not isinstance(head.data, (bytes, bytearray)) or len(head.data) < 8:
                 return None
-            fmt_level = struct.unpack(">H", head.data[0:2])[0]
-            minor = struct.unpack(">H", head.data[2:4])[0]
-            major = fmt_level - 71
-            return f"{major}.{minor}"
+            vid = struct.unpack(">I", head.data[4:8])[0]
+            maj_a = (vid >> 26) & 0x1F
+            os_code = (vid >> 22) & 0x0F
+            maj_b = (vid >> 19) & 0x07
+            minor = (vid >> 15) & 0x0F
+            patch = (vid >> 11) & 0x0F
+            beta_flag = (vid >> 9) & 0x01
+            build = vid & 0xFF
+            major = maj_a * 8 + maj_b
+            ver = f"{major}.{minor}.{patch}" if patch else f"{major}.{minor}"
+            return {
+                "major": major,
+                "minor": minor,
+                "patch": patch,
+                "build": build,
+                "os": self._OS_NAMES.get(os_code, f"Unknown({os_code})"),
+                "os_code": os_code,
+                "beta": not beta_flag,
+                "version": ver,
+            }
         except Exception:
             return None
+
+    @property
+    def ae_version(self) -> str | None:
+        """AE version string, e.g. ``"25.6.4"``.
+
+        Returns ``None`` for ``.aepx`` files or if the header is missing.
+        """
+        info = self._decode_version_id()
+        return info["version"] if info else None
+
+    @property
+    def ae_version_info(self) -> dict | None:
+        """Full AE version info decoded from the ``version_id`` bit field.
+
+        Returns a dict with keys: ``major``, ``minor``, ``patch``, ``build``,
+        ``os`` (str), ``os_code`` (int), ``beta`` (bool), ``version`` (str).
+        Returns ``None`` for ``.aepx`` files or if the header is missing.
+        """
+        return self._decode_version_id()
 
     # Write support
 
