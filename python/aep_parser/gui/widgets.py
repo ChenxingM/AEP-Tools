@@ -612,12 +612,35 @@ class CompWidget(QWidget):
                 ("Null Layer", "is_null"), ("Collapse Transformation", "continuously_rasterize"),
                 ("Motion Blur", "motion_blur_enabled"), ("Effects Enabled", "effects_enabled"),
                 ("Auto-Orient", "auto_orient"), ("Bicubic Sampling", "bicubic_sampling"),
+                ("Frame Blending", "frame_blending"),
+                ("Frame Blending Type (Pixel Motion)", "frame_blending_type"),
+                ("Audio Enabled", "audio_enabled"),
+                ("Environment Layer", "environment_layer"),
             ]:
                 act = flags_menu.addAction(flag_label)
                 act.setCheckable(True)
                 act.setChecked(self._get_layer_flag(item, flag_key))
                 act.triggered.connect(
                     lambda checked, k=flag_key: self._toggle_layer_flag(item, k, checked))
+            # Preserve Transparency (separate API)
+            pt_act = menu.addAction("Preserve Transparency")
+            pt_act.setCheckable(True)
+            pt_act.setChecked(self._get_layer_flag(item, "preserve_transparency"))
+            pt_act.triggered.connect(
+                lambda checked: self._toggle_preserve_transparency(item, checked))
+            # Light Type (only for light layers)
+            layer_id = item.data(0, ROLE_LAYER_ID)
+            layer_type = None
+            for layer in self.comp.get("layers", []):
+                if layer.get("id") == layer_id:
+                    layer_type = layer.get("type")
+                    break
+            if layer_type == "light":
+                light_menu = menu.addMenu("Light Type")
+                for lname, lval in [("Parallel", 0), ("Spot", 1),
+                                     ("Point", 2), ("Ambient", 3)]:
+                    light_menu.addAction(
+                        lname, lambda v=lval: self._set_layer_light_type(item, v))
             # Label
             label_menu = menu.addMenu("Label")
             for idx, lbl in enumerate(
@@ -718,6 +741,20 @@ class CompWidget(QWidget):
         comp_id = self.comp.get("id")
         if layer_id is not None and comp_id is not None:
             self._tools_project.change_layer_flag(comp_id, layer_id, flag_key, value)
+
+    def _toggle_preserve_transparency(self, item: QTreeWidgetItem, value: bool):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_preserve_transparency(
+                comp_id, layer_id, value)
+
+    def _set_layer_light_type(self, item: QTreeWidgetItem, light_type: int):
+        layer_id = item.data(0, ROLE_LAYER_ID)
+        comp_id = self.comp.get("id")
+        if layer_id is not None and comp_id is not None:
+            self._tools_project.change_layer_light_type(
+                comp_id, layer_id, light_type)
 
     def _set_layer_label(self, item: QTreeWidgetItem, label: int):
         layer_id = item.data(0, ROLE_LAYER_ID)
@@ -1067,6 +1104,7 @@ class ProjectPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tools_project = None
+        self._comp_data: dict[int, dict] = {}
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1119,6 +1157,8 @@ class ProjectPanel(QWidget):
 
     def load_project(self, data: dict, tools_project=None):
         self._tools_project = tools_project
+        self._comp_data = {}
+        self._collect_comps(data.get("folder", {}))
         self.tree.clear()
         self.rq_tree.clear()
         self.effects_tree.clear()
@@ -1209,6 +1249,16 @@ class ProjectPanel(QWidget):
         self.rq_tree.addTopLevelItem(item)
         item.setExpanded(True)
 
+    def _collect_comps(self, folder: dict):
+        """Recursively collect comp data dicts keyed by id."""
+        for item in folder.get("items", []):
+            if "items" in item:
+                self._collect_comps(item)
+            elif "layers" in item:
+                cid = item.get("id")
+                if cid is not None:
+                    self._comp_data[cid] = item
+
     def _build_folder(self, parent_item, folder: dict):
         for item in folder.get("items", []):
             if "items" in item:
@@ -1266,6 +1316,50 @@ class ProjectPanel(QWidget):
             menu.addAction("Edit Frame Rate...", lambda: self._edit_comp_framerate(comp_id))
             menu.addAction("Edit Duration...", lambda: self._edit_comp_duration(comp_id))
             menu.addAction("Edit Background Color...", lambda: self._edit_comp_bgcolor(comp_id))
+            # Comp Flags submenu
+            comp_flags_menu = menu.addMenu("Comp Flags")
+            for flag_label, flag_key in [
+                ("Draft 3D", "draft3d"),
+                ("Motion Blur", "motion_blur"),
+                ("Frame Blending", "frame_blending"),
+                ("Hide Shy Layers", "hide_shy_layers"),
+                ("Preserve Nested Resolution", "preserve_nested_resolution"),
+                ("Preserve Nested Frame Rate", "preserve_nested_frame_rate"),
+                ("Drop Frame", "drop_frame"),
+            ]:
+                act = comp_flags_menu.addAction(flag_label)
+                act.setCheckable(True)
+                act.setChecked(self._get_comp_flag(comp_id, flag_key))
+                act.triggered.connect(
+                    lambda checked, k=flag_key, cid=comp_id: self._toggle_comp_flag(cid, k, checked))
+            # Additional comp edit actions
+            menu.addAction("Edit Work Area...", lambda: self._edit_comp_work_area(comp_id))
+            menu.addAction("Edit Shutter...", lambda: self._edit_comp_shutter(comp_id))
+            menu.addAction("Edit Motion Blur Samples...", lambda: self._edit_comp_mb_samples(comp_id))
+            menu.addAction("Edit Pixel Aspect...", lambda: self._edit_comp_pixel_aspect(comp_id))
+            menu.addAction("Edit Display Start Time...", lambda: self._edit_comp_display_start(comp_id))
+
+        # Project Settings — always available when writable
+        if self._tools_project is not None and self._tools_project.writable:
+            settings_menu = menu.addMenu("Project Settings")
+            bpc_menu = settings_menu.addMenu("Bits Per Channel")
+            for bits in [8, 16, 32]:
+                bpc_menu.addAction(f"{bits} bpc",
+                                   lambda b=bits: self._set_project_bpc(b))
+            gamma_menu = settings_menu.addMenu("Working Gamma")
+            gamma_menu.addAction("2.2", lambda: self._set_project_gamma(2.2))
+            gamma_menu.addAction("2.4", lambda: self._set_project_gamma(2.4))
+            for plabel, pattr in [
+                ("Linearize Working Space", "linearize_working_space"),
+                ("Compensate Scene Referred", "compensate_scene_referred"),
+            ]:
+                act = settings_menu.addAction(plabel)
+                act.setCheckable(True)
+                act.setChecked(getattr(self._tools_project, pattr, False))
+                act.triggered.connect(
+                    lambda checked, a=pattr: setattr(self._tools_project, a, checked))
+            settings_menu.addAction("Edit Audio Sample Rate...",
+                                    self._edit_audio_sample_rate)
 
         if not menu.isEmpty():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -1357,6 +1451,129 @@ class ProjectPanel(QWidget):
                 return
             r, g, b = int(nums[0]), int(nums[1]), int(nums[2])
         self._tools_project.change_comp_bgcolor(comp_id, r, g, b)
+
+    def _get_comp_flag(self, comp_id: int, flag_key: str) -> bool:
+        cd = self._comp_data.get(comp_id, {})
+        flags = cd.get("flags", {})
+        # Comp dict uses camelCase keys; convert snake_case to camelCase
+        parts = flag_key.split("_")
+        camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+        return bool(flags.get(camel, False))
+
+    def _toggle_comp_flag(self, comp_id: int, flag_key: str, value: bool):
+        if flag_key == "drop_frame":
+            self._tools_project.change_comp_drop_frame(comp_id, value)
+        else:
+            self._tools_project.change_comp_flag(comp_id, flag_key, value)
+
+    def _edit_comp_work_area(self, comp_id: int):
+        cd = self._comp_data.get(comp_id, {})
+        cur_start = cd.get("inTime", 0)
+        cur_end = cd.get("outTime", 0)
+        text, ok = QInputDialog.getText(
+            self, "Edit Work Area",
+            "start, duration (seconds):",
+            text=f"{cur_start}, {cur_end - cur_start}")
+        if not ok or not text.strip():
+            return
+        nums = re.findall(r'[\d.]+', text.strip())
+        if len(nums) < 2:
+            return
+        try:
+            start, dur = float(nums[0]), float(nums[1])
+        except ValueError:
+            return
+        self._tools_project.change_comp_work_area_start(comp_id, start)
+        self._tools_project.change_comp_work_area_end(comp_id, start + dur)
+
+    def _edit_comp_shutter(self, comp_id: int):
+        cd = self._comp_data.get(comp_id, {})
+        cur_angle = cd.get("shutterAngle", 0)
+        cur_phase = cd.get("shutterPhase", 0)
+        text, ok = QInputDialog.getText(
+            self, "Edit Shutter",
+            "angle, phase (e.g. 180, -90):",
+            text=f"{cur_angle}, {cur_phase}")
+        if not ok or not text.strip():
+            return
+        nums = re.findall(r'-?\d+', text.strip())
+        if len(nums) < 2:
+            return
+        try:
+            angle, phase = int(nums[0]), int(nums[1])
+        except ValueError:
+            return
+        self._tools_project.change_comp_shutter_angle(comp_id, angle)
+        self._tools_project.change_comp_shutter_phase(comp_id, phase)
+
+    def _edit_comp_mb_samples(self, comp_id: int):
+        cd = self._comp_data.get(comp_id, {})
+        cur_spf = cd.get("motionBlurSamplesPerFrame", 16)
+        cur_lim = cd.get("motionBlurAdaptiveSampleLimit", 128)
+        text, ok = QInputDialog.getText(
+            self, "Edit Motion Blur Samples",
+            "samples_per_frame, adaptive_limit:",
+            text=f"{cur_spf}, {cur_lim}")
+        if not ok or not text.strip():
+            return
+        nums = re.findall(r'\d+', text.strip())
+        if len(nums) < 2:
+            return
+        try:
+            spf, lim = int(nums[0]), int(nums[1])
+        except ValueError:
+            return
+        self._tools_project.change_comp_motion_blur_samples(comp_id, spf, lim)
+
+    def _edit_comp_pixel_aspect(self, comp_id: int):
+        cd = self._comp_data.get(comp_id, {})
+        cur = cd.get("pixelAspect", 1.0)
+        text, ok = QInputDialog.getText(
+            self, "Edit Pixel Aspect Ratio",
+            "Ratio (e.g. 1.0):",
+            text=str(cur))
+        if not ok or not text.strip():
+            return
+        try:
+            ratio = float(text.strip())
+        except ValueError:
+            return
+        self._tools_project.change_comp_pixel_aspect(comp_id, ratio)
+
+    def _edit_comp_display_start(self, comp_id: int):
+        cd = self._comp_data.get(comp_id, {})
+        cur = cd.get("displayStartTime", 0.0)
+        text, ok = QInputDialog.getText(
+            self, "Edit Display Start Time",
+            "Start time (seconds):",
+            text=str(cur))
+        if not ok or not text.strip():
+            return
+        try:
+            t = float(text.strip())
+        except ValueError:
+            return
+        self._tools_project.change_comp_display_start_time(comp_id, t)
+
+    def _set_project_bpc(self, bits: int):
+        self._tools_project.bits_per_channel = bits
+
+    def _set_project_gamma(self, gamma: float):
+        self._tools_project.working_gamma = gamma
+
+    def _edit_audio_sample_rate(self):
+        cur = getattr(self._tools_project, 'audio_sample_rate', 48000.0)
+        text, ok = QInputDialog.getText(
+            self, "Edit Audio Sample Rate",
+            "Sample rate (Hz):",
+            text=str(cur))
+        if not ok or not text.strip():
+            return
+        try:
+            rate = float(text.strip())
+        except ValueError:
+            return
+        self._tools_project.audio_sample_rate = rate
 
     def _on_double_click(self, item: QTreeWidgetItem, col: int):
         comp_id = item.data(0, Qt.UserRole)
