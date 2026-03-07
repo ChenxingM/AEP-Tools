@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import struct
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -88,6 +89,9 @@ class ProjectParser:
         cl = root_chunk.list
         fold, efdg, lrdr = cl.find_multiple(["Fold", "EfdG", "LRdr"])
 
+        # Project-level settings
+        self._parse_project_settings(cl, project)
+
         if efdg is not None:
             self._parse_effects(efdg.list.find_all("EfDf"), project)
 
@@ -114,6 +118,57 @@ class ProjectParser:
             self._parse_render_queue(lrdr, project)
 
         return project
+
+    def _parse_project_settings(self, cl: ChunkList, project: Project) -> None:
+        """Parse nnhd, acer, adfr, dwga and other project-level chunks."""
+        _BITS_MAP = {0: 8, 1: 16, 2: 32}
+
+        nnhd = cl.find_optional("nnhd")
+        if nnhd is not None and isinstance(nnhd.data, (bytes, bytearray)):
+            r = self._chunk_reader(nnhd)
+            r.skip(8)
+            flags_byte = r.read_uint(1)
+            project.time_display_type = flags_byte & 0x7F
+            r.skip(4)
+            project.project_frame_rate = r.read_uint(2)
+            r.skip(4)
+            r.skip(1)  # frames_count_type
+            r.skip(3)
+            project.bits_per_channel = _BITS_MAP.get(r.read_uint(1), 8)
+            project.transparency_grid_thumbnails = bool(r.read_uint(1))
+            r.skip(5)
+            lin_byte = r.read_uint(1)
+            project.linearize_working_space = bool((lin_byte >> 5) & 1)
+
+        acer = cl.find_optional("acer")
+        if acer is not None and isinstance(acer.data, (bytes, bytearray)) and len(acer.data) >= 1:
+            project.compensate_scene_referred = bool(acer.data[0])
+
+        adfr = cl.find_optional("adfr")
+        if adfr is not None and isinstance(adfr.data, (bytes, bytearray)) and len(adfr.data) >= 8:
+            project.audio_sample_rate = struct.unpack(">d", adfr.data[:8])[0]
+
+        dwga = cl.find_optional("dwga")
+        if dwga is not None and isinstance(dwga.data, (bytes, bytearray)) and len(dwga.data) >= 1:
+            project.working_gamma = 2.4 if dwga.data[0] else 2.2
+
+        # Expression engine (ExEn LIST → Utf8)
+        exen = cl.find_optional("ExEn")
+        if exen is not None and exen.list is not None:
+            utf8 = exen.list.find_optional("Utf8")
+            if utf8 is not None and isinstance(utf8.data, str):
+                project.expression_engine = utf8.data
+
+        # GPU acceleration (gpuG LIST → Utf8)
+        _GPU_UUIDS = {
+            "7ee0ab59-822d-44cc-ac10-16279d041016": "CUDA",
+            "f33089e2-1ede-47c1-8a9e-b232bb1cc1a4": "Software",
+        }
+        gpug = cl.find_optional("gpuG")
+        if gpug is not None and gpug.list is not None:
+            utf8 = gpug.list.find_optional("Utf8")
+            if utf8 is not None and isinstance(utf8.data, str):
+                project.gpu_accel_type = _GPU_UUIDS.get(utf8.data, utf8.data)
 
     # Render Queue
 
@@ -346,6 +401,34 @@ class ProjectParser:
         width = sr.read_uint(2)
         sr.skip(2)
         height = sr.read_uint(2)
+
+        # Duration & frame rate
+        sspc_data = sspc.data if isinstance(sspc.data, (bytes, bytearray)) else b""
+        dur_dividend = dur_divisor = 0
+        frame_rate = 0.0
+        alpha_mode = 3
+        pixel_aspect = 1.0
+        loop_count = 1
+        footage_missing = False
+        if len(sspc_data) >= 62:
+            dur_dividend = struct.unpack(">I", sspc_data[38:42])[0]
+            dur_divisor = struct.unpack(">I", sspc_data[42:46])[0]
+            fr_base = struct.unpack(">I", sspc_data[56:60])[0]
+            fr_frac = struct.unpack(">H", sspc_data[60:62])[0]
+            frame_rate = fr_base + fr_frac / 65536.0
+        if len(sspc_data) >= 74:
+            alpha_mode = sspc_data[73]
+        if len(sspc_data) >= 142:
+            pr_w = struct.unpack(">I", sspc_data[134:138])[0]
+            pr_h = struct.unpack(">I", sspc_data[138:142])[0]
+            if pr_h:
+                pixel_aspect = pr_w / pr_h
+        if len(sspc_data) >= 114:
+            footage_missing = bool(sspc_data[113])
+        if len(sspc_data) >= 128:
+            loop_count = sspc_data[127]
+
+        # Sequence info (read from known working offsets)
         sr.skip(2)
         seq_count = sr.read_uint(2)
         sr.skip(132)
@@ -383,8 +466,15 @@ class ProjectParser:
             if ref_data.get("target_is_folder"):
                 seq_info = SequenceInfo(count=seq_count, start=seq_start,
                                         end=seq_end, max_length=seq_max_len)
-            asset = ImageAsset(id=asset_id, name=name, full_path=full_path,
-                               width=width, height=height, sequence_info=seq_info)
+            duration = dur_dividend / dur_divisor if dur_divisor else 0.0
+            asset = ImageAsset(
+                id=asset_id, name=name, full_path=full_path,
+                width=width, height=height,
+                frame_rate=frame_rate, duration=duration,
+                pixel_aspect=pixel_aspect, alpha_mode=alpha_mode,
+                loop=loop_count, missing=footage_missing,
+                sequence_info=seq_info,
+            )
 
         project.assets[asset_id] = asset
         return asset
@@ -438,10 +528,52 @@ class ProjectParser:
         comp.color.g = r.read_uint(1)
         comp.color.b = r.read_uint(1)
 
-        r.skip(85)
+        # offset 55: 83 bytes unknown, then 2 bytes of comp flags
+        r.skip(83)
+        comp_flags_1 = r.read_uint(1)
+        comp_flags_2 = r.read_uint(1)
+        comp.draft3d = bool(comp_flags_1 & 0x80)
+        comp.preserve_nested_resolution = bool(comp_flags_2 & 0x80)
+        comp.preserve_nested_frame_rate = bool(comp_flags_2 & 0x20)
+        comp.frame_blending = bool(comp_flags_2 & 0x10)
+        comp.motion_blur = bool(comp_flags_2 & 0x08)
+        comp.hide_shy_layers = bool(comp_flags_2 & 0x01)
+
         comp.width = r.read_uint(2)
         comp.height = r.read_uint(2)
+
+        # pixel aspect ratio
+        pixel_w = r.read_uint(4)
+        pixel_h = r.read_uint(4)
+        if pixel_h:
+            comp.pixel_aspect = pixel_w / pixel_h
+
+        r.skip(4)
+        # frame_rate (more precise than time_scale for display)
+        fr_int = r.read_uint(2)
+        fr_frac = r.read_uint(2)
+        if fr_int:
+            comp.framerate = fr_int + fr_frac / 65536.0
+
+        r.skip(4)
+        # display start time
+        dst_dividend = r.read_sint(4)
+        dst_divisor = r.read_uint(4)
+        if dst_divisor:
+            comp.display_start_time = dst_dividend / dst_divisor
+
+        r.skip(2)
+        comp.shutter_angle = r.read_uint(2)
+        r.skip(4)
+        comp.shutter_phase = r.read_sint(4)
         r.skip(12)
+        comp.motion_blur_adaptive_sample_limit = r.read_sint(4)
+        comp.motion_blur_samples_per_frame = r.read_sint(4)
+
+        # drop frame flag
+        cdrp = cl.find_optional("cdrp")
+        if cdrp is not None and isinstance(cdrp.data, (bytes, bytearray)) and len(cdrp.data) >= 1:
+            comp.drop_frame = bool(cdrp.data[0])
 
         for child in cl.children:
             if child.name == "Layr":
@@ -476,31 +608,51 @@ class ProjectParser:
         layer.label_color = r.read_uint(1)
         r.skip(2)
         r.skip(32)
-        layer.blend_mode = r.read_uint(4)
-        r.skip(4)
-        layer.matte_mode = r.read_uint(4)
-        r.skip(2)
-        time_stretch_den = r.read_uint(2)
+        r.skip(3)
+        layer.blend_mode = r.read_uint(1)
+        r.skip(3)
+        layer.preserve_transparency = bool(r.read_uint(1))
+        r.skip(3)
+        layer.matte_mode = r.read_uint(1)
+        time_stretch_den = r.read_uint(4)
         r.skip(19)
         layer.layer_type = r.read_uint(1)
         layer.parent_id = r.read_uint(4)
-        r.skip(24)
+        r.skip(3)
+        layer.light_type = r.read_uint(1)
+        r.skip(20)
         layer.matte_id = r.read_uint(4)
 
-        # Decode bit flags
+        # Decode bit flags (byte 0 is padding, flags start at byte 1)
         layer.is_guide = flags.get_bit(1, 1)
+        layer.frame_blending_type = 1 if flags.get_bit(1, 2) else 0
+        layer.environment_layer = flags.get_bit(1, 5)
         layer.bicubic_sampling = flags.get_bit(1, 6)
-        layer.auto_orient = flags.get_bit(2, 0)
+        auto_along_path = flags.get_bit(2, 0)
         layer.is_adjustment = flags.get_bit(2, 1)
         layer.threedimensional = flags.get_bit(2, 2)
         layer.solo = flags.get_bit(2, 3)
+        auto_camera_poi = flags.get_bit(2, 5)
         layer.is_null = flags.get_bit(2, 7)
         layer.visible = flags.get_bit(3, 0)
+        layer.audio_enabled = flags.get_bit(3, 1)
         layer.effects_enabled = flags.get_bit(3, 2)
         layer.motion_blur_enabled = flags.get_bit(3, 3)
+        layer.frame_blending = flags.get_bit(3, 4)
         layer.locked = flags.get_bit(3, 5)
         layer.shy = flags.get_bit(3, 6)
+        layer.collapse_transformation = flags.get_bit(3, 7)
         layer.continuously_rasterize = flags.get_bit(3, 7)
+        # Auto-orient: derive mode from multiple flag bits
+        chars_toward_cam = (flags._data[1] >> 3) & 0x03
+        if chars_toward_cam == 3:
+            layer.auto_orient = 3  # charsTowardCamera
+        elif auto_camera_poi and layer.threedimensional:
+            layer.auto_orient = 2  # cameraOrPoi
+        elif auto_along_path:
+            layer.auto_orient = 1  # alongPath
+        else:
+            layer.auto_orient = 0  # none
 
         # Time values (rational numbers)
         layer.start_time = start_time_num / start_time_den if start_time_den else 0

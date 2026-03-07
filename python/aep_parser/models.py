@@ -414,6 +414,14 @@ BLEND_MODES = {
 
 MATTE_MODES = {0: "none", 1: "alpha", 2: "alphaInverted", 3: "luma", 4: "lumaInverted"}
 
+_AUTO_ORIENT = {
+    0: "none", 1: "alongPath", 2: "cameraOrPoi", 3: "charsTowardCamera",
+}
+
+_LIGHT_TYPES = {0: "parallel", 1: "spot", 2: "point", 3: "ambient"}
+
+_ALPHA_MODES = {0: "straight", 1: "premultiplied", 2: "ignore", 3: "none"}
+
 
 @dataclass
 class Layer:
@@ -439,11 +447,18 @@ class Layer:
     is_guide: bool = False
     is_adjustment: bool = False
     threedimensional: bool = False
-    auto_orient: bool = False
+    auto_orient: int = 0  # 0=none, 1=along_path, 2=camera_or_poi, 3=chars_toward_camera
     bicubic_sampling: bool = False
     continuously_rasterize: bool = False
+    collapse_transformation: bool = False
     effects_enabled: bool = False
     motion_blur_enabled: bool = False
+    frame_blending: bool = False
+    frame_blending_type: int = 0  # 0=frame_mix, 1=pixel_motion
+    preserve_transparency: bool = False
+    audio_enabled: bool = False
+    environment_layer: bool = False
+    light_type: int = 0  # 0=parallel, 1=spot, 2=point, 3=ambient
     properties: PropertyGroup = field(default_factory=PropertyGroup)
 
     def to_dict(self) -> dict:
@@ -466,16 +481,25 @@ class Layer:
         if self.matte_mode:
             d["matteMode"] = MATTE_MODES.get(self.matte_mode, self.matte_mode)
             d["matteId"] = self.matte_id
+        if self.auto_orient:
+            d["autoOrient"] = _AUTO_ORIENT.get(self.auto_orient, self.auto_orient)
+        if self.light_type and self.layer_type == 1:
+            d["lightType"] = _LIGHT_TYPES.get(self.light_type, self.light_type)
         # flags
         flags = {}
         for attr in ("visible", "solo", "shy", "locked", "is_null", "is_guide",
-                      "is_adjustment", "threedimensional", "auto_orient",
+                      "is_adjustment", "threedimensional",
                       "effects_enabled", "motion_blur_enabled",
-                      "continuously_rasterize", "bicubic_sampling"):
+                      "continuously_rasterize", "collapse_transformation",
+                      "bicubic_sampling", "frame_blending",
+                      "preserve_transparency", "audio_enabled",
+                      "environment_layer"):
             val = getattr(self, attr)
             default = attr == "visible"  # visible defaults to True
             if val != default:
                 flags[_camel(attr)] = val
+        if self.frame_blending_type:
+            flags["frameBlendingType"] = "pixelMotion"
         if flags:
             d["flags"] = flags
         if self.properties.properties:
@@ -497,6 +521,19 @@ class Composition:
     out_time: float = 0.0
     playhead_time: float = 0.0
     color: Color = field(default_factory=Color)
+    pixel_aspect: float = 1.0
+    display_start_time: float = 0.0
+    shutter_angle: int = 0
+    shutter_phase: int = 0
+    motion_blur_samples_per_frame: int = 0
+    motion_blur_adaptive_sample_limit: int = 0
+    draft3d: bool = False
+    motion_blur: bool = False
+    frame_blending: bool = False
+    hide_shy_layers: bool = False
+    preserve_nested_resolution: bool = False
+    preserve_nested_frame_rate: bool = False
+    drop_frame: bool = False
     layers: list[Layer] = field(default_factory=list)
     markers: Layer | None = None
     views: list[Layer] = field(default_factory=list)
@@ -514,6 +551,26 @@ class Composition:
             "backgroundColor": self.color.to_dict(),
             "layers": [l.to_dict() for l in self.layers],
         }
+        if self.pixel_aspect != 1.0:
+            d["pixelAspect"] = self.pixel_aspect
+        if self.display_start_time:
+            d["displayStartTime"] = self.display_start_time
+        if self.shutter_angle:
+            d["shutterAngle"] = self.shutter_angle
+        if self.shutter_phase:
+            d["shutterPhase"] = self.shutter_phase
+        if self.motion_blur_samples_per_frame:
+            d["motionBlurSamplesPerFrame"] = self.motion_blur_samples_per_frame
+        if self.motion_blur_adaptive_sample_limit:
+            d["motionBlurAdaptiveSampleLimit"] = self.motion_blur_adaptive_sample_limit
+        comp_flags: dict[str, Any] = {}
+        for attr in ("draft3d", "motion_blur", "frame_blending", "hide_shy_layers",
+                      "preserve_nested_resolution", "preserve_nested_frame_rate",
+                      "drop_frame"):
+            if getattr(self, attr):
+                comp_flags[_camel(attr)] = True
+        if comp_flags:
+            d["flags"] = comp_flags
         if self.markers:
             d["markers"] = self.markers.to_dict()
         return d
@@ -540,11 +597,29 @@ class ImageAsset:
     full_path: str = ""
     width: int = 0
     height: int = 0
+    frame_rate: float = 0.0
+    duration: float = 0.0
+    pixel_aspect: float = 1.0
+    alpha_mode: int = 3  # 0=straight, 1=premultiplied, 2=ignore, 3=none
+    loop: int = 1
+    missing: bool = False
     sequence_info: SequenceInfo | None = None
 
     def to_dict(self) -> dict:
         d: dict = {"type": "image", "id": self.id, "name": self.name,
                     "fullPath": self.full_path, "width": self.width, "height": self.height}
+        if self.frame_rate:
+            d["frameRate"] = self.frame_rate
+        if self.duration:
+            d["duration"] = self.duration
+        if self.pixel_aspect != 1.0:
+            d["pixelAspect"] = self.pixel_aspect
+        if self.alpha_mode != 3:
+            d["alphaMode"] = _ALPHA_MODES.get(self.alpha_mode, self.alpha_mode)
+        if self.loop > 1:
+            d["loop"] = self.loop
+        if self.missing:
+            d["missing"] = True
         if self.sequence_info:
             d["sequenceInfo"] = self.sequence_info.to_dict()
         return d
@@ -669,6 +744,17 @@ class Project:
     effects: dict[str, EffectDefinition] = field(default_factory=dict)
     render_queue: list[RenderQueueItem] = field(default_factory=list)
     current_item: Any = None
+    # Project settings
+    bits_per_channel: int = 8
+    project_frame_rate: int = 0
+    time_display_type: int = 0  # 0=timecode, 1=frames
+    expression_engine: str = ""
+    gpu_accel_type: str = ""
+    audio_sample_rate: float = 0.0
+    working_gamma: float = 2.2
+    linearize_working_space: bool = False
+    compensate_scene_referred: bool = False
+    transparency_grid_thumbnails: bool = False
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -677,6 +763,30 @@ class Project:
             "assets": {str(k): _val(v) for k, v in self.assets.items()},
             "effects": {k: v.to_dict() for k, v in self.effects.items()},
         }
+        # Project settings
+        settings: dict[str, Any] = {}
+        if self.bits_per_channel != 8:
+            settings["bitsPerChannel"] = self.bits_per_channel
+        if self.project_frame_rate:
+            settings["frameRate"] = self.project_frame_rate
+        if self.time_display_type:
+            settings["timeDisplayType"] = "frames"
+        if self.expression_engine:
+            settings["expressionEngine"] = self.expression_engine
+        if self.gpu_accel_type:
+            settings["gpuAccelType"] = self.gpu_accel_type
+        if self.audio_sample_rate:
+            settings["audioSampleRate"] = self.audio_sample_rate
+        if self.working_gamma != 2.2:
+            settings["workingGamma"] = self.working_gamma
+        if self.linearize_working_space:
+            settings["linearizeWorkingSpace"] = True
+        if self.compensate_scene_referred:
+            settings["compensateSceneReferred"] = True
+        if self.transparency_grid_thumbnails:
+            settings["transparencyGridThumbnails"] = True
+        if settings:
+            d["settings"] = settings
         if self.render_queue:
             d["renderQueue"] = [rq.to_dict() for rq in self.render_queue]
         return d
