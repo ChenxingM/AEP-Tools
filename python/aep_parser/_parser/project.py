@@ -6,30 +6,19 @@ This corresponds to the we$3/pt$2 class in the original JS code.
 from __future__ import annotations
 
 import json
-import math
 import struct
-import xml.etree.ElementTree as ET
 from typing import Any
 
 from .binary_reader import BinaryReader
 from .chunk import Chunk, ChunkList
-from .cos import CosParser
 from ..models import (
-    AnimatedProperty, BezierShape, CharacterStyle, Color, Composition,
-    EffectDefinition, EffectInstance, EffectParameter, Folder, Font, Gradient,
-    GradientStop, ImageAsset, Keyframe, Layer, LayerRef, LineStyle, Marker,
-    MaskData, NamedProperty, OutputModule, OUTPUT_FORMATS, ParagraphStyle,
-    Project, PropertyGroup, RenderQueueItem, SequenceInfo, SolidAsset,
-    TextDocument, TextProperty, Vector,
+    Color, Composition, Folder, ImageAsset, Layer, OutputModule,
+    OUTPUT_FORMATS, Project, RenderQueueItem, SequenceInfo, SolidAsset, Vector,
 )
+from ._property_parser import PropertyParserMixin
+from ._effect_parser import EffectParserMixin
 
 _NAME_PLACEHOLDER = "-_0_/-"
-
-# Groups that genuinely have on/off toggles in AE UI.
-# All other groups with split=True in tdsb should NOT show enabled state.
-_TOGGLE_GROUPS = {
-    "ADBE Layer Styles",
-}
 
 # Mask mode constants
 MASK_NONE = 0
@@ -41,19 +30,7 @@ MASK_LIGHTEN = 5
 MASK_DIFFERENCE = 6
 
 
-# Default properties for Transform Group — AE omits these from the binary
-# when they are at their default values.
-# AE always stores Anchor Point as 3-component (x, y, z) even for 2D layers.
-_TRANSFORM_DEFAULTS = [
-    ("ADBE Anchor Point", 2, 3, [0.0, 0.0, 0.0]),
-    ("ADBE Position", 2, 2, [0.0, 0.0]),
-    ("ADBE Scale", 3, 2, [1.0, 1.0]),
-    ("ADBE Rotate Z", 3, 1, 0.0),
-    ("ADBE Opacity", 3, 1, 1.0),
-]
-
-
-class ProjectParser:
+class ProjectParser(PropertyParserMixin, EffectParserMixin):
     """Converts a parsed RIFF chunk tree into a Project model."""
 
     def __init__(self, big_endian: bool = True):
@@ -89,7 +66,6 @@ class ProjectParser:
         cl = root_chunk.list
         fold, efdg, lrdr = cl.find_multiple(["Fold", "EfdG", "LRdr"])
 
-        # Project-level settings
         self._parse_project_settings(cl, project)
 
         if efdg is not None:
@@ -105,7 +81,6 @@ class ProjectParser:
             if chunks:
                 self._parse_composition(comp, chunks, project)
 
-        # Resolve empty layer names → use source asset/comp name
         for comp in project.compositions:
             for layer in comp.layers:
                 if not layer.name and layer.asset_id:
@@ -113,7 +88,6 @@ class ProjectParser:
                     if asset is not None:
                         layer.name = getattr(asset, "name", "")
 
-        # Parse render queue
         if lrdr is not None:
             self._parse_render_queue(lrdr, project)
 
@@ -129,7 +103,7 @@ class ProjectParser:
             r.skip(8)
             flags_byte = r.read_uint(1)
             project.time_display_type = flags_byte & 0x7F
-            r.skip(4)
+            r.skip(5)
             project.project_frame_rate = r.read_uint(2)
             r.skip(4)
             r.skip(1)  # frames_count_type
@@ -152,14 +126,12 @@ class ProjectParser:
         if dwga is not None and isinstance(dwga.data, (bytes, bytearray)) and len(dwga.data) >= 1:
             project.working_gamma = 2.4 if dwga.data[0] else 2.2
 
-        # Expression engine (ExEn LIST → Utf8)
         exen = cl.find_optional("ExEn")
         if exen is not None and exen.list is not None:
             utf8 = exen.list.find_optional("Utf8")
             if utf8 is not None and isinstance(utf8.data, str):
                 project.expression_engine = utf8.data
 
-        # GPU acceleration (gpuG LIST → Utf8)
         _GPU_UUIDS = {
             "7ee0ab59-822d-44cc-ac10-16279d041016": "CUDA",
             "f33089e2-1ede-47c1-8a9e-b232bb1cc1a4": "Software",
@@ -175,7 +147,6 @@ class ProjectParser:
     def _parse_render_queue(self, lrdr_chunk: Chunk, project: Project) -> None:
         cl = lrdr_chunk.list
 
-        # Top-level list contains the RQ item records (lhd3 + ldat)
         item_list = cl.find_optional("list")
         if item_list is None:
             return
@@ -196,18 +167,13 @@ class ProjectParser:
         if not isinstance(ldat_data, (bytes, bytearray)):
             return
 
-        # LItm contains per-item timing lists and LOm output modules
         litm = cl.find_optional("LItm")
         litm_children = litm.list.children if litm is not None else []
 
-        # Build comp name lookup
         comp_names: dict[int, str] = {}
         for comp in project.compositions:
             comp_names[comp.id] = comp.name
 
-        # Parse each RQ item record
-        # LItm has alternating: LIST list (timing) + LIST LOm (outputs)
-        # for each of the `count` items
         om_lists: list[ChunkList] = []
         for c in litm_children:
             if c.name.rstrip() == "LOm":
@@ -227,35 +193,25 @@ class ProjectParser:
         r = BinaryReader(data, 0, self.big_endian)
         item = RenderQueueItem()
 
-        # offset 0-7: flags/version
         r.skip(8)
-        # offset 8-11: composition ID
         item.comp_id = r.read_uint(4)
         item.comp_name = comp_names.get(item.comp_id, "")
-        # offset 12-15: status
         item.status = r.read_uint(4)
-        # offset 16-19: unknown
         r.skip(4)
 
-        # offset 20-27: start time (num/den, in 1024-based units)
         start_num = r.read_sint(4)
         start_den = r.read_uint(4)
-        # offset 28-35: duration/end (num/den)
         dur_num = r.read_sint(4)
         dur_den = r.read_uint(4)
 
         if start_den > 0:
-            # Scale: num is in 1024-unit frames, den is fps*1024
             fps_scale = start_den / 1024.0
             item.start_frame = round(start_num / 1024.0)
             if dur_num > 0:
                 item.end_frame = item.start_frame + round(dur_num / 1024.0) - 1
-        # If start_den == 0, it's a full comp render (no custom range)
 
-        # offset 36-89: reserved
         r.skip(54)
 
-        # offset 90+: render settings name (null-terminated UTF-8)
         remaining = data[90:]
         nul = remaining.find(b"\x00")
         if nul > 0:
@@ -276,7 +232,6 @@ class ProjectParser:
             om = OutputModule()
             roou_data = c.data
             if isinstance(roou_data, (bytes, bytearray)) and len(roou_data) >= 42:
-                # offset 26: format name (4-byte code, null-terminated string)
                 fmt_start = 26
                 fmt_end = roou_data.find(b"\x00", fmt_start, fmt_start + 20)
                 if fmt_end > fmt_start:
@@ -284,24 +239,18 @@ class ProjectParser:
                     om.format = fmt_code
                     om.format_label = OUTPUT_FORMATS.get(fmt_code, fmt_code)
 
-                # offset 36-37: width, offset 40-41: height
                 om.width = int.from_bytes(roou_data[36:38], "big" if self.big_endian else "little")
                 om.height = int.from_bytes(roou_data[40:42], "big" if self.big_endian else "little")
 
-            # Collect associated chunks after Roou.
-            # Known order: Ropt, [hdrm], [Utf8 extras], Als2, Utf8, Utf8
             i += 1
-            # Skip Ropt
             if i < len(children) and children[i].header == "Ropt":
                 i += 1
-            # Skip any intermediate chunks (hdrm, extra Utf8) until Als2 or next Roou
             while i < len(children):
                 h = children[i].header
                 n = getattr(children[i], "name", "") or ""
                 if n == "Als2" or h == "Roou":
                     break
                 i += 1
-            # Als2 → output path
             if i < len(children) and children[i].name == "Als2":
                 als2 = children[i].list
                 alas = als2.find_optional("alas")
@@ -314,13 +263,11 @@ class ProjectParser:
                     except (json.JSONDecodeError, AttributeError):
                         pass
                 i += 1
-            # First Utf8 → template name
             if i < len(children) and children[i].header == "Utf8":
                 name = children[i].data
                 if isinstance(name, str):
                     om.template_name = name
                 i += 1
-            # Second Utf8 → file name template
             if i < len(children) and children[i].header == "Utf8":
                 name = children[i].data
                 if isinstance(name, str):
@@ -339,7 +286,6 @@ class ProjectParser:
             if child.name == "Item":
                 self._process_item(child, folder, project)
             elif child.name == "Sfdr":
-                # Sub-folder: flatten Items from nested Sfdr
                 for sub in child.list.children:
                     if sub.name == "Item":
                         self._process_item(sub, folder, project)
@@ -361,13 +307,11 @@ class ProjectParser:
         item_id = reader.read_uint(4)
 
         if item_type == 1:
-            # Folder
             sub_folder = Folder(id=item_id, name=name)
             folder.items.append(sub_folder)
             self._parse_folder(chunk, sub_folder, project)
 
         elif item_type == 4:
-            # Composition
             comp = Composition(id=item_id, name=name)
             project.compositions.append(comp)
             project.assets[item_id] = comp
@@ -375,7 +319,6 @@ class ProjectParser:
             folder.items.append(comp)
 
         elif item_type == 7:
-            # Asset
             pin = cl.find_optional("Pin ")
             if pin is not None:
                 asset = self._parse_asset(item_id, pin, project)
@@ -395,14 +338,12 @@ class ProjectParser:
 
         name = "".join(self._utf8_name(u) for u in utf8_chunks)
 
-        # Parse sspc (source parameters)
         sr = self._chunk_reader(sspc)
         sr.skip(32)
         width = sr.read_uint(2)
         sr.skip(2)
         height = sr.read_uint(2)
 
-        # Duration & frame rate
         sspc_data = sspc.data if isinstance(sspc.data, (bytes, bytearray)) else b""
         dur_dividend = dur_divisor = 0
         frame_rate = 0.0
@@ -410,6 +351,7 @@ class ProjectParser:
         pixel_aspect = 1.0
         loop_count = 1
         footage_missing = False
+        seq_start = seq_end = seq_max_len = 0
         if len(sspc_data) >= 62:
             dur_dividend = struct.unpack(">I", sspc_data[38:42])[0]
             dur_divisor = struct.unpack(">I", sspc_data[42:46])[0]
@@ -418,34 +360,26 @@ class ProjectParser:
             frame_rate = fr_base + fr_frac / 65536.0
         if len(sspc_data) >= 74:
             alpha_mode = sspc_data[73]
-        if len(sspc_data) >= 142:
-            pr_w = struct.unpack(">I", sspc_data[134:138])[0]
-            pr_h = struct.unpack(">I", sspc_data[138:142])[0]
+        if len(sspc_data) >= 116:
+            footage_missing = bool(sspc_data[115])
+        if len(sspc_data) >= 130:
+            loop_count = sspc_data[129]
+        if len(sspc_data) >= 144:
+            pr_w = struct.unpack(">I", sspc_data[136:140])[0]
+            pr_h = struct.unpack(">I", sspc_data[140:144])[0]
             if pr_h:
                 pixel_aspect = pr_w / pr_h
-        if len(sspc_data) >= 114:
-            footage_missing = bool(sspc_data[113])
-        if len(sspc_data) >= 128:
-            loop_count = sspc_data[127]
+        if len(sspc_data) >= 184:
+            seq_start = struct.unpack(">I", sspc_data[172:176])[0]
+            seq_end = struct.unpack(">I", sspc_data[176:180])[0]
+            seq_max_len = struct.unpack(">I", sspc_data[180:184])[0]
 
-        # Sequence info (read from known working offsets)
-        sr.skip(2)
-        seq_count = sr.read_uint(2)
-        sr.skip(132)
-        seq_start = sr.read_uint(2)
-        sr.skip(2)
-        seq_end = sr.read_uint(2)
-        sr.skip(2)
-        seq_max_len = sr.read_uint(2)
-
-        # Parse opti (asset options)
         odr = self._chunk_reader(opti)
         opti_type = odr.read_string("utf-8", 4)
         odr.skip(2)
         odr.skip(4)
 
         if opti_type == "Soli":
-            # Solid color asset
             color = Color()
             color.a = odr.read_float32()
             color.r = self._solid_color_val(odr.read_float32())
@@ -455,7 +389,6 @@ class ProjectParser:
             asset = SolidAsset(id=asset_id, name=solid_name, color=color,
                                width=width, height=height)
         else:
-            # File reference asset (image, audio, etc.)
             if als2 is None:
                 return None
             ref_data = json.loads(als2.list.find("alas").data)
@@ -464,7 +397,8 @@ class ProjectParser:
             full_path = ref_data.get("fullpath", "")
             seq_info = None
             if ref_data.get("target_is_folder"):
-                seq_info = SequenceInfo(count=seq_count, start=seq_start,
+                count = (seq_end - seq_start + 1) if seq_end >= seq_start else 0
+                seq_info = SequenceInfo(count=count, start=seq_start,
                                         end=seq_end, max_length=seq_max_len)
             duration = dur_dividend / dur_divisor if dur_divisor else 0.0
             asset = ImageAsset(
@@ -487,90 +421,128 @@ class ProjectParser:
 
     def _parse_composition(self, comp: Composition, cl: ChunkList,
                            project: Project) -> None:
+        """Parse cdta using fixed offsets per Kaitai spec.
+
+        cdta layout (big-endian):
+            0-3:   resolution_factor (u2be[2])
+            5-6:   time_scale_integer (u2be)
+            7:     time_scale_fractional (u1)
+            20-23: time_dividend (s4be)
+            24-27: time_divisor (u4be)
+            28-31: in_point_dividend (u4be)
+            32-35: in_point_divisor (u4be)
+            36-39: out_point_dividend (u4be)
+            40-43: out_point_divisor (u4be)
+            44-47: duration_dividend (u4be)
+            48-51: duration_divisor (u4be)
+            52-54: bg_color (u1[3])
+            138:   comp_flags_1
+            139:   comp_flags_2
+            140-143: width, height (u2be each)
+            144-151: pixel_ratio_width, pixel_ratio_height (u4be each)
+            156-157: frame_rate_integer (u2be)
+            158-159: frame_rate_fractional (u2be)
+            164-167: display_start_time_dividend (s4be)
+            168-171: display_start_time_divisor (u4be)
+            174-175: shutter_angle (u2be)
+            180-183: shutter_phase (s4be)
+            196-199: motion_blur_adaptive_sample_limit (s4be)
+            200-203: motion_blur_samples_per_frame (s4be)
+        """
         cdta = cl.find("cdta")
-        r = self._chunk_reader(cdta)
+        d = cdta.data
+        if not isinstance(d, (bytes, bytearray)):
+            return
+        fmt = ">" if self.big_endian else "<"
 
-        r.skip(4)
-        time_denom = r.read_uint(4)
-        time_num = r.read_uint(4)
-        comp.framerate = time_num / time_denom if time_denom else 30.0
+        # Frame rate at offset 156-159
+        if len(d) >= 160:
+            fr_int = struct.unpack_from(f"{fmt}H", d, 156)[0]
+            fr_frac = struct.unpack_from(f"{fmt}H", d, 158)[0]
+            comp.framerate = fr_int + fr_frac / 65536.0 if fr_int else 30.0
+        else:
+            comp.framerate = 30.0
 
-        r.skip(9)
-        comp.playhead_time = r.read_uint(2)
-        r.skip(2)
-        ph_div = r.read_uint(2) / comp.framerate if comp.framerate else 1
-        comp.playhead_time /= (ph_div or 1)
+        # Current time (playhead) at offset 20-27
+        if len(d) >= 28:
+            time_div = struct.unpack_from(f"{fmt}i", d, 20)[0]
+            time_dvs = struct.unpack_from(f"{fmt}I", d, 24)[0]
+            comp.playhead_time = time_div / time_dvs if time_dvs else 0
 
-        r.skip(2)
-        comp.in_time = r.read_uint(2)
-        r.skip(2)
-        in_div = r.read_uint(2) / comp.framerate if comp.framerate else 1
-        comp.in_time /= (in_div or 1)
+        # Work area in point at offset 28-35
+        if len(d) >= 36:
+            in_div = struct.unpack_from(f"{fmt}I", d, 28)[0]
+            in_dvs = struct.unpack_from(f"{fmt}I", d, 32)[0]
+            comp.in_time = in_div / in_dvs if in_dvs else 0
 
-        r.skip(2)
-        comp.out_time = r.read_uint(2)
-        r.skip(2)
-        out_div = r.read_uint(2) / comp.framerate if comp.framerate else 1
+        # Work area out point at offset 36-43
+        out_dividend = 0xFFFFFFFF
+        out_divisor = 1
+        if len(d) >= 44:
+            out_dividend = struct.unpack_from(f"{fmt}I", d, 36)[0]
+            out_divisor = struct.unpack_from(f"{fmt}I", d, 40)[0]
 
-        r.skip(2)
-        comp.duration = r.read_uint(2)
-        r.skip(2)
-        dur_div = r.read_uint(2) / comp.framerate if comp.framerate else 1
-        comp.duration /= (dur_div or 1)
+        # Duration at offset 44-51
+        if len(d) >= 52:
+            dur_div = struct.unpack_from(f"{fmt}I", d, 44)[0]
+            dur_dvs = struct.unpack_from(f"{fmt}I", d, 48)[0]
+            comp.duration = dur_div / dur_dvs if dur_dvs else 0
 
-        if comp.out_time == 65535:
+        # Out time: 0xFFFFFFFF means use duration
+        if out_dividend == 0xFFFFFFFF:
             comp.out_time = comp.duration
         else:
-            comp.out_time /= (out_div or 1)
+            comp.out_time = out_dividend / out_divisor if out_divisor else 0
 
-        r.skip(1)
-        comp.color.r = r.read_uint(1)
-        comp.color.g = r.read_uint(1)
-        comp.color.b = r.read_uint(1)
+        # Background color at offset 52-54
+        if len(d) >= 55:
+            comp.color.r = d[52]
+            comp.color.g = d[53]
+            comp.color.b = d[54]
 
-        # offset 55: 83 bytes unknown, then 2 bytes of comp flags
-        r.skip(83)
-        comp_flags_1 = r.read_uint(1)
-        comp_flags_2 = r.read_uint(1)
-        comp.draft3d = bool(comp_flags_1 & 0x80)
-        comp.preserve_nested_resolution = bool(comp_flags_2 & 0x80)
-        comp.preserve_nested_frame_rate = bool(comp_flags_2 & 0x20)
-        comp.frame_blending = bool(comp_flags_2 & 0x10)
-        comp.motion_blur = bool(comp_flags_2 & 0x08)
-        comp.hide_shy_layers = bool(comp_flags_2 & 0x01)
+        # Flags at offset 138-139
+        if len(d) >= 140:
+            comp.draft3d = bool(d[138] & 0x80)
+            comp.preserve_nested_resolution = bool(d[139] & 0x80)
+            comp.preserve_nested_frame_rate = bool(d[139] & 0x20)
+            comp.frame_blending = bool(d[139] & 0x10)
+            comp.motion_blur = bool(d[139] & 0x08)
+            comp.hide_shy_layers = bool(d[139] & 0x01)
 
-        comp.width = r.read_uint(2)
-        comp.height = r.read_uint(2)
+        # Dimensions at offset 140-143
+        if len(d) >= 144:
+            comp.width = struct.unpack_from(f"{fmt}H", d, 140)[0]
+            comp.height = struct.unpack_from(f"{fmt}H", d, 142)[0]
 
-        # pixel aspect ratio
-        pixel_w = r.read_uint(4)
-        pixel_h = r.read_uint(4)
-        if pixel_h:
-            comp.pixel_aspect = pixel_w / pixel_h
+        # Pixel aspect at offset 144-151
+        if len(d) >= 152:
+            pixel_w = struct.unpack_from(f"{fmt}I", d, 144)[0]
+            pixel_h = struct.unpack_from(f"{fmt}I", d, 148)[0]
+            if pixel_h:
+                comp.pixel_aspect = pixel_w / pixel_h
 
-        r.skip(4)
-        # frame_rate (more precise than time_scale for display)
-        fr_int = r.read_uint(2)
-        fr_frac = r.read_uint(2)
-        if fr_int:
-            comp.framerate = fr_int + fr_frac / 65536.0
+        # Display start time at offset 164-171
+        if len(d) >= 172:
+            dst_dividend = struct.unpack_from(f"{fmt}i", d, 164)[0]
+            dst_divisor = struct.unpack_from(f"{fmt}I", d, 168)[0]
+            if dst_divisor:
+                comp.display_start_time = dst_dividend / dst_divisor
 
-        r.skip(4)
-        # display start time
-        dst_dividend = r.read_sint(4)
-        dst_divisor = r.read_uint(4)
-        if dst_divisor:
-            comp.display_start_time = dst_dividend / dst_divisor
+        # Shutter angle at offset 174
+        if len(d) >= 176:
+            comp.shutter_angle = struct.unpack_from(f"{fmt}H", d, 174)[0]
 
-        r.skip(2)
-        comp.shutter_angle = r.read_uint(2)
-        r.skip(4)
-        comp.shutter_phase = r.read_sint(4)
-        r.skip(12)
-        comp.motion_blur_adaptive_sample_limit = r.read_sint(4)
-        comp.motion_blur_samples_per_frame = r.read_sint(4)
+        # Shutter phase at offset 180
+        if len(d) >= 184:
+            comp.shutter_phase = struct.unpack_from(f"{fmt}i", d, 180)[0]
 
-        # drop frame flag
+        # Motion blur samples at offset 196-203
+        if len(d) >= 204:
+            comp.motion_blur_adaptive_sample_limit = struct.unpack_from(
+                f"{fmt}i", d, 196)[0]
+            comp.motion_blur_samples_per_frame = struct.unpack_from(
+                f"{fmt}i", d, 200)[0]
+
         cdrp = cl.find_optional("cdrp")
         if cdrp is not None and isinstance(cdrp.data, (bytes, bytearray)) and len(cdrp.data) >= 1:
             comp.drop_frame = bool(cdrp.data[0])
@@ -623,7 +595,6 @@ class ProjectParser:
         r.skip(20)
         layer.matte_id = r.read_uint(4)
 
-        # Decode bit flags (byte 0 is padding, flags start at byte 1)
         layer.is_guide = flags.get_bit(1, 1)
         layer.frame_blending_type = 1 if flags.get_bit(1, 2) else 0
         layer.environment_layer = flags.get_bit(1, 5)
@@ -643,24 +614,21 @@ class ProjectParser:
         layer.shy = flags.get_bit(3, 6)
         layer.collapse_transformation = flags.get_bit(3, 7)
         layer.continuously_rasterize = flags.get_bit(3, 7)
-        # Auto-orient: derive mode from multiple flag bits
         chars_toward_cam = (flags._data[1] >> 3) & 0x03
         if chars_toward_cam == 3:
-            layer.auto_orient = 3  # charsTowardCamera
+            layer.auto_orient = 3
         elif auto_camera_poi and layer.threedimensional:
-            layer.auto_orient = 2  # cameraOrPoi
+            layer.auto_orient = 2
         elif auto_along_path:
-            layer.auto_orient = 1  # alongPath
+            layer.auto_orient = 1
         else:
-            layer.auto_orient = 0  # none
+            layer.auto_orient = 0
 
-        # Time values (rational numbers)
         layer.start_time = start_time_num / start_time_den if start_time_den else 0
         layer.out_time = out_time_num / out_time_den if out_time_den else 0
         layer.in_time = in_time_num / in_time_den if in_time_den else 0
         layer.time_stretch = time_stretch_num / time_stretch_den if time_stretch_den else 1
 
-        # Parse property tree
         if tdgp is not None:
             self._current_layer_3d = layer.threedimensional
             self._parse_property_group(tdgp.list, layer.properties,
@@ -668,755 +636,3 @@ class ProjectParser:
             self._current_layer_3d = False
 
         return layer
-
-    # Property Group
-
-    def _parse_property_group(self, cl: ChunkList, group: PropertyGroup,
-                              key_prefix: str = "") -> None:
-        match_name = ""
-        i = 0
-        while i < len(cl.children):
-            child = cl.children[i]
-
-            if child.header == "tdmn":
-                match_name = child.data
-
-            elif child.header == "tdsb":
-                # Property visibility / split flags
-                fl = self._chunk_reader(child).read_flags(4)
-                vis = fl.get_bit(3, 0)
-                split = fl.get_bit(3, 1)
-                group.split_position = split
-                if split:
-                    # In Layer Styles sub-groups, split=True means this is
-                    # an enable/disable toggle, not a visibility flag
-                    group.enabled = vis
-                else:
-                    group.visible = vis
-
-            elif child.header == "tdsn":
-                # Property name
-                utf8 = child.list.find_optional("Utf8")
-                group.name = self._utf8_name(utf8)
-
-            elif child.name == "mkif":
-                # Mask info
-                mask = MaskData()
-                mr = self._chunk_reader(child)
-                mask.inverted = bool(mr.read_uint(1))
-                mask.locked = bool(mr.read_uint(1))
-                mr.skip(4)
-                mode_val = mr.read_uint(2)
-                mask.mode = mode_val if mode_val <= 6 else 0
-                i += 1
-                mr.skip(3)
-                mask.index = mr.read_uint(1)
-                if i < len(cl.children):
-                    parsed = self._parse_property(cl.children[i])
-                    if isinstance(parsed, PropertyGroup):
-                        mask.properties = parsed
-                group.properties.append(NamedProperty(match_name, mask))
-                match_name = ""
-
-            elif child.name in ("OvG2", "blsi", "blsv"):
-                match_name = ""
-
-            elif match_name:
-                suffix = ""
-                if child.name == "tdgp" and match_name == "ADBE Vector Group":
-                    tdsn = child.list.find_optional("tdsn")
-                    if tdsn is not None:
-                        utf8 = tdsn.list.find_optional("Utf8")
-                        n = self._utf8_name(utf8)
-                        if n:
-                            suffix = f" - {n}"
-
-                full_key = f"{key_prefix}/{match_name}{suffix}" if key_prefix else match_name
-                indexed_key = self._get_indexed_key(full_key)
-                parsed = self._parse_property(child, indexed_key)
-                if parsed is not None:
-                    if match_name == "ADBE Layer Styles" and isinstance(parsed, PropertyGroup):
-                        self._fix_layer_styles_enabled(parsed)
-                    elif isinstance(parsed, PropertyGroup) and parsed.enabled is not None \
-                            and match_name not in _TOGGLE_GROUPS:
-                        parsed.enabled = None
-                    parsed.key = indexed_key
-                    group.properties.append(NamedProperty(match_name, parsed))
-                    if match_name == "ADBE Transform Group" and isinstance(parsed, PropertyGroup):
-                        self._inject_transform_defaults(parsed, key_prefix)
-                match_name = ""
-
-            i += 1
-
-    @staticmethod
-    def _fix_layer_styles_enabled(group: PropertyGroup) -> None:
-        """Derive correct enabled state for Layer Styles and its sub-styles.
-
-        Some sub-styles have split=True with an explicit enabled flag, while
-        others have split=False (enabled stays None) but contain child
-        properties indicating they are active.  Normalise both cases so every
-        */enabled sub-group gets an explicit enabled bool, then derive the
-        root group state from its children.
-        """
-        from ..models import PropertyGroup as PG
-        for np in group.properties:
-            if not np.match_name.endswith("/enabled"):
-                continue
-            v = np.value
-            if not isinstance(v, PG):
-                continue
-            # If tdsb didn't set enabled (split was False), infer from props
-            if v.enabled is None:
-                v.enabled = bool(v.properties)
-
-        # Root enabled = any sub-style is on
-        group.enabled = any(
-            isinstance(np.value, PG) and np.value.enabled is True
-            for np in group.properties
-            if np.match_name.endswith("/enabled")
-        )
-
-    def _inject_transform_defaults(self, group: PropertyGroup,
-                                     key_prefix: str) -> None:
-        """Add default entries for standard Transform properties not in the binary."""
-        existing = {np.match_name for np in group.properties}
-        # Don't add ADBE Position if position is split (ADBE Position_0 etc.)
-        has_split_pos = any(mn.startswith("ADBE Position_") for mn in existing)
-        is_3d = self._current_layer_3d
-        for mn, prop_type, components, default_val in _TRANSFORM_DEFAULTS:
-            if mn in existing:
-                continue
-            if mn == "ADBE Position" and has_split_pos:
-                continue
-            # 3D layers need 3-component Position
-            if is_3d and mn == "ADBE Position":
-                components = 3
-                default_val = [0.0, 0.0, 0.0]
-            full_key = f"{key_prefix}/ADBE Transform Group/{mn}" if key_prefix else f"ADBE Transform Group/{mn}"
-            prop = AnimatedProperty(
-                key=full_key, prop_type=prop_type,
-                components=components, value=default_val,
-            )
-            group.properties.append(NamedProperty(mn, prop))
-
-    def _parse_property(self, chunk: Chunk,
-                        key: str = "") -> PropertyGroup | AnimatedProperty | EffectInstance | TextProperty | None:
-        name = chunk.name
-        if name == "tdgp":
-            pg = PropertyGroup()
-            self._parse_property_group(chunk.list, pg, key)
-            return pg
-        if name == "sspc":
-            return self._parse_effect_instance(chunk.list)
-        if name == "tdbs":
-            return self._parse_animated_property(chunk.list, [])
-        if name == "om-s":
-            return self._parse_animated_shape(chunk.list)
-        if name == "GCst":
-            return self._parse_animated_gradient(chunk.list)
-        if name == "otst":
-            return self._parse_animated_orientation(chunk.list)
-        if name == "mrst":
-            return self._parse_animated_marker(chunk.list)
-        if name == "btds":
-            return self._parse_animated_text(chunk.list)
-        return None
-
-    # Animated Property
-
-    def _parse_animated_property(self, cl: ChunkList,
-                                 extra_values: list) -> AnimatedProperty:
-        prop = AnimatedProperty()
-        tdsb, tdb4, cdat, lst, utf8, tdpi, tdps, tdli = cl.find_multiple(
-            ["tdsb", "tdb4", "cdat", "list", "Utf8", "tdpi", "tdps", "tdli"])
-
-        # Flags
-        fl = self._chunk_reader(tdsb).read_flags(4)
-        prop.split = fl.get_bit(3, 1)
-
-        # tdb4: property metadata
-        br = self._chunk_reader(tdb4)
-        br.skip(2)
-        prop.components = br.read_uint(2)
-        flags2 = br.read_flags(2)
-        is_spatial = flags2.get_bit(1, 3)
-        br.skip(7)
-        time_scale = br.read_uint(4)
-        br.skip(39)
-        flags3 = br.read_flags(4)
-        is_color = flags3.get_bit(1, 0)
-        is_bool = flags3.get_bit(3, 0)
-        is_ref = flags3.get_bit(3, 2)
-
-        br.skip(8)
-        if is_spatial:
-            prop.prop_type = 2
-        elif is_bool:
-            prop.prop_type = 0
-        elif is_color:
-            prop.prop_type = 1
-        elif is_ref:
-            prop.prop_type = 5
-        else:
-            prop.prop_type = 3
-
-        prop.animated = br.read_uint(1) == 1
-
-        # Handle special ref types
-        if is_ref and tdpi is not None:
-            prop.prop_type = 4
-            ref = LayerRef()
-            ref.layer_id = self._chunk_reader(tdpi).read_uint(4)
-            if tdps is not None:
-                ref.layer_source = self._chunk_reader(tdps).read_sint(4)
-            prop.value = ref
-        elif is_ref and tdli is not None:
-            prop.prop_type = 6
-            prop.value = self._chunk_reader(tdli).read_uint(4)
-        elif cdat is not None and prop.components > 0:
-            cr = self._chunk_reader(cdat)
-            # Only read float64 values if we have enough data
-            if cr.remaining() >= prop.components * 8:
-                raw = cr.read_array(prop.components, cr.read_float64)
-                prop.value = self._property_value(0, raw, extra_values, prop.prop_type)
-
-        # Keyframes
-        if lst is not None:
-            items = self._list_values(lst)
-            for idx, item_reader in enumerate(items):
-                kf = self._load_keyframe(idx, item_reader, prop, extra_values,
-                                         time_scale)
-                prop.keyframes.append(kf)
-
-        # Expression
-        if utf8 is not None:
-            prop.expression = self._utf8_name(utf8)
-
-        return prop
-
-    def _property_value(self, idx: int, raw: list[float],
-                        extra_values: list, prop_type: int) -> Any:
-        if prop_type == 1:
-            return extra_values[idx] if extra_values else None
-        if prop_type == 0:
-            # Color: [alpha, red, green, blue]
-            r = self._clamp_color(raw[1])
-            g = self._clamp_color(raw[2])
-            b = self._clamp_color(raw[3])
-            a = min(1.0, max(0.0, raw[0]))
-            return Color(r, g, b, a)
-        if len(raw) == 1:
-            return raw[0]
-        return Vector(*raw) if len(raw) <= 3 else Vector(raw[0], raw[1], raw[2] if len(raw) > 2 else None)
-
-    @staticmethod
-    def _clamp_color(v: float) -> float:
-        if 0 <= v <= 255:
-            return v
-        if 0 <= v <= 1:
-            return v * 255
-        if v > 255:
-            return min(255, max(0, v / 255))
-        return min(255, max(0, v))
-
-    def _list_values(self, list_chunk: Chunk) -> list[BinaryReader]:
-        cl = list_chunk.list
-        lhd3, ldat = cl.find_multiple(["lhd3", "ldat"])
-        if lhd3 is None or ldat is None:
-            return []
-
-        hr = self._chunk_reader(lhd3)
-        hr.skip(10)
-        count = hr.read_uint(2)
-        hr.skip(6)
-        item_size = hr.read_uint(2)
-
-        if not isinstance(ldat.data, (bytes, bytearray)):
-            return []
-        if len(ldat.data) < count * item_size:
-            raise ValueError("Not enough data in ldat chunk")
-
-        readers = []
-        for i in range(count):
-            start = i * item_size
-            readers.append(BinaryReader(ldat.data[start:start + item_size], 0,
-                                        self.big_endian))
-        return readers
-
-    def _load_keyframe(self, idx: int, reader: BinaryReader,
-                       prop: AnimatedProperty, extra_values: list,
-                       time_scale: int) -> Keyframe:
-        kf = Keyframe()
-        reader.skip(1)
-        time_raw = reader.read_sint(4)
-        kf.time = time_raw / time_scale if time_scale else 0
-        kf.transition_type = reader.read_uint(1)
-        kf.label_color = reader.read_uint(1)
-
-        flag_byte = reader.read_flags(1)
-        kf.roving = flag_byte.get_bit(0, 5)
-        if flag_byte.get_bit(0, 3):
-            kf.bezier_mode = 1
-        elif flag_byte.get_bit(0, 4):
-            kf.bezier_mode = 2
-        else:
-            kf.bezier_mode = 0
-
-        ptype = prop.prop_type
-        spv = BinaryReader.process_speed_value
-
-        if ptype == 1:
-            # Scalar
-            kf.value = extra_values[idx] if idx < len(extra_values) else None
-            if reader.remaining() >= 48:  # 16 skip + 4×8 floats
-                reader.skip(16)
-                kf.in_speed.append(spv(reader.read_float64()))
-                kf.in_influence.append(reader.read_float64())
-                kf.out_speed.append(spv(reader.read_float64()))
-                kf.out_influence.append(reader.read_float64())
-
-        elif ptype in (3, 5):
-            # Multi-dimensional
-            needed = prop.components * 5 * 8  # value + 4 arrays
-            if reader.remaining() >= needed:
-                kf.value = Vector(*reader.read_array(prop.components,
-                                                      reader.read_float64))
-                kf.in_speed = [spv(reader.read_float64())
-                               for _ in range(prop.components)]
-                kf.in_influence = reader.read_array(prop.components,
-                                                     reader.read_float64)
-                kf.out_speed = [spv(reader.read_float64())
-                                for _ in range(prop.components)]
-                kf.out_influence = reader.read_array(prop.components,
-                                                      reader.read_float64)
-
-        elif ptype == 2:
-            # Spatial (with bezier tangents)
-            needed = 16 + (4 + prop.components * 3) * 8
-            if reader.remaining() >= needed:
-                reader.skip(16)
-                kf.in_speed.append(spv(reader.read_float64()))
-                kf.in_influence.append(reader.read_float64())
-                kf.out_speed.append(spv(reader.read_float64()))
-                kf.out_influence.append(reader.read_float64())
-                kf.value = Vector(*reader.read_array(prop.components,
-                                                      reader.read_float64))
-                kf.in_tangent = Vector(*reader.read_array(prop.components,
-                                                           reader.read_float64))
-                kf.out_tangent = Vector(*reader.read_array(prop.components,
-                                                            reader.read_float64))
-
-        elif ptype == 0:
-            # Color
-            if reader.remaining() >= 48:  # 16 skip + 4×8 floats
-                reader.skip(16)
-                kf.in_speed.append(spv(reader.read_float64()))
-                kf.in_influence.append(reader.read_float64())
-                kf.out_speed.append(spv(reader.read_float64()))
-                kf.out_influence.append(reader.read_float64())
-            if reader.remaining() >= prop.components * 8:
-                raw = reader.read_array(prop.components, reader.read_float64)
-                if len(raw) >= 4:
-                    kf.value = Color(raw[1], raw[2], raw[3], raw[0] / 255)
-                else:
-                    kf.value = Vector(*raw)
-
-        return kf
-
-    # Animated Shape
-
-    def _parse_animated_shape(self, cl: ChunkList) -> AnimatedProperty:
-        omks, tdbs = cl.find_multiple(["omks", "tdbs"])
-        max_verts = 0
-        shapes = []
-        for shap in omks.list.find_all("shap"):
-            bezier = self._parse_bezier(shap.list)
-            max_verts = max(max_verts, len(bezier.points) // 3)
-            shapes.append(bezier)
-
-        for s in shapes:
-            s.group_info["maxVertexCount"] = max_verts
-            s.group_info["bezierCount"] = len(shapes)
-
-        return self._parse_animated_property(tdbs.list, shapes)
-
-    def _parse_bezier(self, cl: ChunkList) -> BezierShape:
-        shape = BezierShape()
-        shph = cl.find("shph")
-        r = self._chunk_reader(shph)
-        r.skip(3)
-        fl = r.read_flags(1)
-        shape.closed = not fl.get_bit(0, 3)
-        shape.minimum.x = r.read_float32()
-        shape.minimum.y = r.read_float32()
-        shape.maximum.x = r.read_float32()
-        shape.maximum.y = r.read_float32()
-
-        list_chunk = cl.find("list")
-        for item_reader in self._list_values(list_chunk):
-            x = item_reader.read_float32()
-            y = item_reader.read_float32()
-            if not (math.isnan(x) or math.isnan(y)):
-                shape.points.append(Vector(x, y))
-
-        return shape
-
-    # Animated Gradient
-
-    def _parse_animated_gradient(self, cl: ChunkList) -> AnimatedProperty:
-        gcky, tdbs = cl.find_multiple(["GCky", "tdbs"])
-        gradients = []
-        for utf8 in gcky.list.find_all("Utf8"):
-            gradients.append(self._parse_gradient(utf8.data))
-        return self._parse_animated_property(tdbs.list, gradients)
-
-    def _parse_gradient(self, xml_str: str) -> Gradient:
-        root = ET.fromstring(xml_str)
-        data = self._parse_ae_prop_xml(root)
-        grad_data = data.get("Gradient Color Data", {})
-        gradient = Gradient()
-
-        color_stops_data = grad_data.get("Color Stops", {})
-        stops_list = color_stops_data.get("Stops List", {})
-        for stop in stops_list.values():
-            sc = stop.get("Stops Color", [])
-            if len(sc) >= 6:
-                gradient.color_stops.append(
-                    GradientStop(sc[0], sc[1], Color(sc[2] * 255, sc[3] * 255,
-                                                      sc[4] * 255, sc[5])))
-
-        alpha_stops_data = grad_data.get("Alpha Stops", {})
-        alpha_list = alpha_stops_data.get("Stops List", {})
-        for stop in alpha_list.values():
-            sa = stop.get("Stops Alpha", [])
-            if len(sa) >= 3:
-                gradient.alpha_stops.append(GradientStop(sa[0], sa[1], sa[2]))
-
-        return gradient
-
-    def _parse_ae_prop_xml(self, elem: ET.Element) -> Any:
-        """Parse After Effects property XML (prop.map, prop.list, array, etc.)."""
-        tag = elem.tag
-        if tag == "prop.map":
-            first = next(iter(elem), None)
-            return self._parse_ae_prop_xml(first) if first is not None else {}
-        if tag == "prop.list":
-            result = {}
-            for child in elem:
-                if child.tag == "prop.pair":
-                    children = list(child)
-                    if len(children) >= 2:
-                        key = children[0].text or ""
-                        val = self._parse_ae_prop_xml(children[-1])
-                        result[key] = val
-            return result
-        if tag == "array":
-            items = []
-            for child in elem:
-                if child.tag != "array.type":
-                    items.append(self._parse_ae_prop_xml(child))
-            return items
-        if tag in ("int", "float"):
-            return float(elem.text) if elem.text else 0
-        if tag == "string":
-            return elem.text or ""
-        return None
-
-    # Animated Orientation
-
-    def _parse_animated_orientation(self, cl: ChunkList) -> AnimatedProperty:
-        otky, tdbs = cl.find_multiple(["otky", "tdbs"])
-        orientations = []
-        for otda in otky.list.find_all("otda"):
-            r = self._chunk_reader(otda)
-            orientations.append(Vector(r.read_float64(), r.read_float64(),
-                                       r.read_float64()))
-        return self._parse_animated_property(tdbs.list, orientations)
-
-    # Animated Marker
-
-    def _parse_animated_marker(self, cl: ChunkList) -> AnimatedProperty:
-        mrky, tdbs = cl.find_multiple(["mrky", "tdbs"])
-        markers = []
-        for nmrd in mrky.list.find_all("Nmrd"):
-            markers.append(self._parse_marker(nmrd))
-        return self._parse_animated_property(tdbs.list, markers)
-
-    def _parse_marker(self, chunk: Chunk) -> Marker:
-        marker = Marker()
-        cl = chunk.list
-        nmhd = cl.find("NmHd")
-        r = self._chunk_reader(nmhd)
-        utf8 = cl.find_optional("Utf8")
-        marker.name = self._utf8_name(utf8)
-        r.skip(3)
-        fl = r.read_flags(1)
-        marker.is_protected = fl.get_bit(0, 1)
-        r.skip(4)
-        dur_num = r.read_uint(4)
-        dur_den = r.read_uint(4)
-        marker.duration = dur_num / dur_den if dur_den else 0
-        marker.label_color = r.read_uint(1)
-        return marker
-
-    # Animated Text
-
-    def _parse_animated_text(self, cl: ChunkList) -> TextProperty:
-        btdk, tdbs = cl.find_multiple(["btdk", "tdbs"])
-        cos_data = CosParser(btdk.data).parse()
-
-        text_prop = TextProperty()
-
-        # Parse fonts: cos_data["0"]["1"]["0"]
-        try:
-            fonts_data = self._cos_val(cos_data, [0, 1, 0])
-            for font_entry in fonts_data:
-                family = self._cos_val(font_entry, [0, 0, 0])
-                text_prop.fonts.append(Font(family=family))
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        # Parse text documents: cos_data["1"]["1"]
-        text_docs: list = []
-        try:
-            docs_data = self._cos_val(cos_data, [1, 1])
-            for doc_entry in docs_data:
-                text_docs.append(self._parse_text_document(doc_entry))
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        text_prop.documents = self._parse_animated_property(tdbs.list, text_docs)
-        return text_prop
-
-    def _parse_text_document(self, data: Any) -> TextDocument:
-        doc = TextDocument()
-
-        try:
-            doc.text = self._cos_val(data, [0, 0])
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        # Paragraph styles
-        try:
-            para_data = self._cos_val(data, [1, 2])
-            for entry in para_data:
-                if not isinstance(entry, dict) or "6" not in entry:
-                    continue
-                for item in self._cos_val(entry, [6]):
-                    if not isinstance(item, dict):
-                        continue
-                    if "0" not in item:
-                        continue
-                    pos_data = self._cos_val(item, [0, 0])
-                    size_data = self._cos_val(item, [1])
-                    if (size_data[2] or size_data[3]) and (pos_data[0] or pos_data[1]):
-                        ps = ParagraphStyle()
-                        ps.wrap_size = Vector(size_data[2], size_data[3])
-                        ps.wrap_position = Vector(pos_data[0], pos_data[1])
-                        doc.paragraph_styles.append(ps)
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        # Line styles
-        try:
-            line_data = self._cos_val(data, [0, 5, 0])
-            for entry in line_data:
-                ls = LineStyle()
-                ls.character_count = self._cos_val(entry, [1])
-                justify_data = self._cos_val(entry, [0, 0, 5])
-                ls.text_justify = self._cos_val(justify_data, 0)
-                doc.line_styles.append(ls)
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        # Character styles
-        try:
-            char_data = self._cos_val(data, [0, 6, 0])
-            for entry in char_data:
-                cs = CharacterStyle()
-                cs.character_count = self._cos_val(entry, [1])
-                style = self._cos_val(entry, [0, 0, 6])
-                cs.font_index = self._cos_val(style, 0)
-                cs.size = self._cos_val(style, 1)
-                cs.faux_bold = bool(self._cos_val(style, 2))
-                cs.faux_italic = bool(self._cos_val(style, 3))
-                cs.leading_auto = bool(self._cos_val(style, 4))
-                cs.leading = self._cos_val(style, 5)
-                cs.tracking = self._cos_val(style, 8)
-                cs.text_transform = self._cos_val(style, 12)
-                cs.vertical_align = self._cos_val(style, 13)
-
-                # Fill
-                fill_enabled = self._cos_val_safe(style, 56, True)
-                cs.fill_enabled = bool(fill_enabled)
-                if cs.fill_enabled:
-                    fill_data = self._cos_val_safe(style, 53, None)
-                    if fill_data:
-                        cs.fill_color = self._cos_color(fill_data, [0, 1])
-                    else:
-                        cs.fill_color = Color(0, 0, 0)
-
-                # Stroke
-                stroke_enabled = self._cos_val_safe(style, 57, False)
-                cs.stroke_enabled = bool(stroke_enabled)
-                if cs.stroke_enabled:
-                    stroke_data = self._cos_val_safe(style, 54, None)
-                    if stroke_data:
-                        cs.stroke_color = self._cos_color(stroke_data, [0, 1])
-                    else:
-                        cs.stroke_color = Color(0, 0, 0)
-                    cs.stroke_over_fill = bool(self._cos_val_safe(style, 58, False))
-                    cs.stroke_width = self._cos_val_safe(style, 63, 1)
-
-                doc.character_styles.append(cs)
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        return doc
-
-    @staticmethod
-    def _cos_val(data: Any, path: list | int) -> Any:
-        if isinstance(path, int):
-            keys = [str(path)]
-        else:
-            keys = [str(p) for p in path]
-        result = data
-        for key in keys:
-            if isinstance(result, dict):
-                result = result[key]
-            elif isinstance(result, list):
-                result = result[int(key)]
-            else:
-                raise KeyError(f"Cannot navigate to {key} in {type(result)}")
-        return result
-
-    @staticmethod
-    def _cos_val_safe(data: Any, key: int, default: Any = None) -> Any:
-        try:
-            k = str(key)
-            if isinstance(data, dict):
-                return data.get(k, default)
-            if isinstance(data, list) and key < len(data):
-                return data[key]
-        except (KeyError, IndexError, TypeError):
-            pass
-        return default
-
-    @staticmethod
-    def _cos_color(data: Any, path: list) -> Color:
-        keys = [str(p) for p in path]
-        result = data
-        for key in keys:
-            result = result[key] if isinstance(result, dict) else result[int(key)]
-        # result should be [alpha, r, g, b] with r,g,b in 0-1 range
-        return Color(result[1] * 255, result[2] * 255, result[3] * 255, result[0])
-
-    # Effects
-
-    def _parse_effects(self, effect_chunks: list[Chunk],
-                       project: Project) -> None:
-        for chunk in effect_chunks:
-            cl = chunk.list
-            tdmn, sspc = cl.find_multiple(["tdmn", "sspc"])
-            if tdmn is None or sspc is None:
-                continue
-
-            effect_def = EffectDefinition()
-            effect_def.match_name = tdmn.data
-
-            fnam, parT = sspc.list.find_multiple(["fnam", "parT"])
-            if fnam is not None:
-                utf8 = fnam.list.find_optional("Utf8")
-                if utf8 is not None:
-                    effect_def.name = self._utf8_name(utf8)
-
-            project.effects[effect_def.match_name] = effect_def
-
-            if parT is None:
-                continue
-
-            i = 0
-            children = parT.list.children
-            while i < len(children):
-                child = children[i]
-                if child.name != "tdmn":
-                    i += 1
-                    continue
-
-                param = EffectParameter()
-                param.match_name = child.data
-
-                if i + 1 < len(children):
-                    self._parse_effect_parameter(
-                        self._chunk_reader(children[i + 1]), param)
-
-                if (i + 2 < len(children) and
-                        children[i + 2].name == "pdnm" and not param.name):
-                    utf8 = children[i + 2].list.find_optional("Utf8")
-                    if utf8:
-                        param.name = self._utf8_name(utf8)
-                    i += 3
-                else:
-                    i += 2
-
-                effect_def.parameters.append(param)
-
-    def _parse_effect_parameter(self, r: BinaryReader,
-                                param: EffectParameter) -> None:
-        r.skip(14)
-        param.param_type = r.read_uint(2)
-        param.name = r.read_nul_string("utf-8", 32)
-        r.skip(8)
-
-        t = param.param_type
-        if t == 0:
-            param.last_value = LayerRef()
-            param.default_value = param.last_value
-        elif t in (2, 3):
-            param.last_value = Vector(r.read_sint(4) / 65536)
-            param.default_value = Vector(0)
-        elif t == 4:
-            param.last_value = Vector(r.read_uint(4))
-            param.default_value = Vector(r.read_uint(1))
-        elif t == 5:
-            a = r.read_uint(1) / 255
-            rv = r.read_uint(1)
-            gv = r.read_uint(1)
-            bv = r.read_uint(1)
-            param.last_value = Color(rv, gv, bv, a)
-            r.skip(1)
-            rv2 = r.read_uint(1)
-            gv2 = r.read_uint(1)
-            bv2 = r.read_uint(1)
-            param.default_value = Color(rv2, gv2, bv2, 1.0)
-        elif t == 6:
-            px = r.read_sint(4) / 128
-            py = r.read_sint(4) / 128
-            param.last_value = Vector(px, py)
-            param.default_value = Vector(0, 0)
-        elif t == 7:
-            param.last_value = Vector(r.read_uint(4))
-            r.skip(2)
-            param.default_value = Vector(r.read_uint(2))
-        elif t == 10:
-            param.last_value = Vector(r.read_float64())
-            param.default_value = Vector(0)
-        elif t == 18:
-            param.last_value = Vector(r.read_float64() * 512,
-                                      r.read_float64() * 512,
-                                      r.read_float64() * 512)
-            param.default_value = Vector(0, 0, 0)
-        else:
-            param.last_value = Vector(0)
-            param.default_value = param.last_value
-
-    def _parse_effect_instance(self, cl: ChunkList) -> EffectInstance:
-        inst = EffectInstance()
-        fnam, tdgp = cl.find_multiple(["fnam", "tdgp"])
-        if fnam is not None:
-            utf8 = fnam.list.find_optional("Utf8")
-            if utf8:
-                inst.name = self._utf8_name(utf8)
-        if tdgp is not None:
-            self._parse_property_group(tdgp.list, inst.parameters)
-        return inst
