@@ -25,8 +25,16 @@ from ._writer import (
     set_keyframe_interpolation, set_keyframe_ease,
     set_layer_flag, set_layer_label, set_layer_blend_mode,
     set_layer_track_matte, set_layer_quality, set_layer_time_field,
+    set_layer_preserve_transparency, set_layer_light_type,
     set_comp_dimensions, set_comp_bgcolor, set_comp_framerate,
     set_comp_duration,
+    set_comp_work_area_start, set_comp_work_area_end,
+    set_comp_flag, set_comp_shutter_angle, set_comp_shutter_phase,
+    set_comp_motion_blur_samples, set_comp_pixel_aspect,
+    set_comp_display_start_time, set_comp_drop_frame,
+    set_project_bits_per_channel, set_project_linearize_working_space,
+    set_project_audio_sample_rate, set_project_working_gamma,
+    set_project_compensate_scene_referred,
 )
 
 
@@ -530,6 +538,23 @@ class Project:
         return set_layer_time_field(self._chunk_tree, comp_id, layer_id,
                                     field, value, self._big_endian)
 
+    def change_layer_preserve_transparency(self, comp_id: int, layer_id: int,
+                                            value: bool) -> bool:
+        """Change a layer's preserve transparency flag."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_preserve_transparency(self._chunk_tree, comp_id,
+                                                layer_id, value,
+                                                self._big_endian)
+
+    def change_layer_light_type(self, comp_id: int, layer_id: int,
+                                 light_type: int) -> bool:
+        """Change a light layer's light type (0=parallel, 1=spot, 2=point, 3=ambient)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_layer_light_type(self._chunk_tree, comp_id, layer_id,
+                                     light_type, self._big_endian)
+
     def change_comp_dimensions(self, comp_id: int, width: int,
                                height: int) -> bool:
         """Change a composition's width and height."""
@@ -559,6 +584,131 @@ class Project:
             raise RuntimeError("Cannot modify: project has no chunk tree.")
         return set_comp_duration(self._chunk_tree, comp_id, duration,
                                  self._big_endian)
+
+    def change_comp_work_area_start(self, comp_id: int, start: float) -> bool:
+        """Change a composition's work area start time."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_work_area_start(self._chunk_tree, comp_id, start,
+                                         self._big_endian)
+
+    def change_comp_work_area_end(self, comp_id: int, end: float) -> bool:
+        """Change a composition's work area end time."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_work_area_end(self._chunk_tree, comp_id, end,
+                                       self._big_endian)
+
+    def change_comp_flag(self, comp_id: int, flag_name: str,
+                          value: bool) -> bool:
+        """Toggle a composition flag (draft3d, motion_blur, frame_blending, etc.)."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_flag(self._chunk_tree, comp_id, flag_name, value,
+                              self._big_endian)
+
+    def change_comp_shutter_angle(self, comp_id: int, angle: int) -> bool:
+        """Change a composition's shutter angle."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_shutter_angle(self._chunk_tree, comp_id, angle,
+                                       self._big_endian)
+
+    def change_comp_shutter_phase(self, comp_id: int, phase: int) -> bool:
+        """Change a composition's shutter phase."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_shutter_phase(self._chunk_tree, comp_id, phase,
+                                       self._big_endian)
+
+    def change_comp_motion_blur_samples(self, comp_id: int,
+                                         samples_per_frame: int,
+                                         adaptive_limit: int) -> bool:
+        """Change a composition's motion blur sample counts."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_motion_blur_samples(self._chunk_tree, comp_id,
+                                             samples_per_frame,
+                                             adaptive_limit,
+                                             self._big_endian)
+
+    def change_comp_pixel_aspect(self, comp_id: int, ratio: float) -> bool:
+        """Change a composition's pixel aspect ratio."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_pixel_aspect(self._chunk_tree, comp_id, ratio,
+                                      self._big_endian)
+
+    def change_comp_display_start_time(self, comp_id: int,
+                                        time: float) -> bool:
+        """Change a composition's display start time."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_display_start_time(self._chunk_tree, comp_id, time,
+                                            self._big_endian)
+
+    def change_comp_drop_frame(self, comp_id: int,
+                                drop_frame: bool) -> bool:
+        """Change a composition's drop frame flag."""
+        if self._chunk_tree is None:
+            raise RuntimeError("Cannot modify: project has no chunk tree.")
+        return set_comp_drop_frame(self._chunk_tree, comp_id, drop_frame,
+                                    self._big_endian)
+
+    # Project settings
+
+    def _write_project_setting(self, writer_fn_name: str, *args) -> None:
+        """Call a project settings writer function."""
+        if self._chunk_tree is not None:
+            import importlib
+            mod = importlib.import_module('._writer', package='aep_tools')
+            fn = getattr(mod, writer_fn_name)
+            fn(self._chunk_tree, *args, self._big_endian)
+
+    @property
+    def bits_per_channel(self) -> int:
+        return self._model.bits_per_channel
+
+    @bits_per_channel.setter
+    def bits_per_channel(self, value: int) -> None:
+        self._model.bits_per_channel = value
+        self._write_project_setting('set_project_bits_per_channel', value)
+
+    @property
+    def linearize_working_space(self) -> bool:
+        return self._model.linearize_working_space
+
+    @linearize_working_space.setter
+    def linearize_working_space(self, value: bool) -> None:
+        self._model.linearize_working_space = value
+        self._write_project_setting('set_project_linearize_working_space', value)
+
+    @property
+    def audio_sample_rate(self) -> float:
+        return self._model.audio_sample_rate
+
+    @audio_sample_rate.setter
+    def audio_sample_rate(self, value: float) -> None:
+        self._model.audio_sample_rate = value
+        self._write_project_setting('set_project_audio_sample_rate', value)
+
+    @property
+    def working_gamma(self) -> float:
+        return self._model.working_gamma
+
+    @working_gamma.setter
+    def working_gamma(self, value: float) -> None:
+        self._model.working_gamma = value
+        self._write_project_setting('set_project_working_gamma', value)
+
+    @property
+    def compensate_scene_referred(self) -> bool:
+        return self._model.compensate_scene_referred
+
+    @compensate_scene_referred.setter
+    def compensate_scene_referred(self, value: bool) -> None:
+        self._model.compensate_scene_referred = value
+        self._write_project_setting('set_project_compensate_scene_referred', value)
 
     def __repr__(self) -> str:
         return f"Project(file={self._file!r}, num_comps={len(self._model.compositions)})"

@@ -136,9 +136,143 @@ class CompItem:
     def work_area_start(self) -> float:
         return self._model.in_time
 
+    @work_area_start.setter
+    def work_area_start(self, value: float) -> None:
+        self._model.in_time = value
+        self._write_cdta('set_comp_work_area_start', value)
+
     @property
     def work_area_duration(self) -> float:
         return self._model.out_time - self._model.in_time
+
+    @work_area_duration.setter
+    def work_area_duration(self, value: float) -> None:
+        end = self._model.in_time + value
+        self._model.out_time = end
+        self._write_cdta('set_comp_work_area_end', end)
+
+    # Comp flags
+
+    def _write_comp_flag(self, model_attr: str, flag_name: str, value: bool) -> None:
+        setattr(self._model, model_attr, value)
+        self._write_cdta('set_comp_flag', flag_name, value)
+
+    @property
+    def draft3d(self) -> bool:
+        return self._model.draft3d
+
+    @draft3d.setter
+    def draft3d(self, value: bool) -> None:
+        self._write_comp_flag('draft3d', 'draft3d', value)
+
+    @property
+    def motion_blur(self) -> bool:
+        return self._model.motion_blur
+
+    @motion_blur.setter
+    def motion_blur(self, value: bool) -> None:
+        self._write_comp_flag('motion_blur', 'motion_blur', value)
+
+    @property
+    def frame_blending(self) -> bool:
+        return self._model.frame_blending
+
+    @frame_blending.setter
+    def frame_blending(self, value: bool) -> None:
+        self._write_comp_flag('frame_blending', 'frame_blending', value)
+
+    @property
+    def hide_shy_layers(self) -> bool:
+        return self._model.hide_shy_layers
+
+    @hide_shy_layers.setter
+    def hide_shy_layers(self, value: bool) -> None:
+        self._write_comp_flag('hide_shy_layers', 'hide_shy_layers', value)
+
+    @property
+    def preserve_nested_resolution(self) -> bool:
+        return self._model.preserve_nested_resolution
+
+    @preserve_nested_resolution.setter
+    def preserve_nested_resolution(self, value: bool) -> None:
+        self._write_comp_flag('preserve_nested_resolution', 'preserve_nested_resolution', value)
+
+    @property
+    def preserve_nested_frame_rate(self) -> bool:
+        return self._model.preserve_nested_frame_rate
+
+    @preserve_nested_frame_rate.setter
+    def preserve_nested_frame_rate(self, value: bool) -> None:
+        self._write_comp_flag('preserve_nested_frame_rate', 'preserve_nested_frame_rate', value)
+
+    # Shutter / motion blur settings
+
+    @property
+    def shutter_angle(self) -> int:
+        return self._model.shutter_angle
+
+    @shutter_angle.setter
+    def shutter_angle(self, value: int) -> None:
+        self._model.shutter_angle = value
+        self._write_cdta('set_comp_shutter_angle', value)
+
+    @property
+    def shutter_phase(self) -> int:
+        return self._model.shutter_phase
+
+    @shutter_phase.setter
+    def shutter_phase(self, value: int) -> None:
+        self._model.shutter_phase = value
+        self._write_cdta('set_comp_shutter_phase', value)
+
+    @property
+    def motion_blur_samples_per_frame(self) -> int:
+        return self._model.motion_blur_samples_per_frame
+
+    @motion_blur_samples_per_frame.setter
+    def motion_blur_samples_per_frame(self, value: int) -> None:
+        self._model.motion_blur_samples_per_frame = value
+        self._write_cdta('set_comp_motion_blur_samples', value,
+                         self._model.motion_blur_adaptive_sample_limit)
+
+    @property
+    def motion_blur_adaptive_sample_limit(self) -> int:
+        return self._model.motion_blur_adaptive_sample_limit
+
+    @motion_blur_adaptive_sample_limit.setter
+    def motion_blur_adaptive_sample_limit(self, value: int) -> None:
+        self._model.motion_blur_adaptive_sample_limit = value
+        self._write_cdta('set_comp_motion_blur_samples',
+                         self._model.motion_blur_samples_per_frame, value)
+
+    # Pixel aspect / display start time / drop frame
+
+    @property
+    def pixel_aspect(self) -> float:
+        return self._model.pixel_aspect
+
+    @pixel_aspect.setter
+    def pixel_aspect(self, value: float) -> None:
+        self._model.pixel_aspect = value
+        self._write_cdta('set_comp_pixel_aspect', value)
+
+    @property
+    def display_start_time(self) -> float:
+        return self._model.display_start_time
+
+    @display_start_time.setter
+    def display_start_time(self, value: float) -> None:
+        self._model.display_start_time = value
+        self._write_cdta('set_comp_display_start_time', value)
+
+    @property
+    def drop_frame(self) -> bool:
+        return self._model.drop_frame
+
+    @drop_frame.setter
+    def drop_frame(self, value: bool) -> None:
+        self._model.drop_frame = value
+        self._write_cdta('set_comp_drop_frame', value)
 
     @property
     def bg_color(self) -> list[float]:

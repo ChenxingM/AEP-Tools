@@ -286,7 +286,48 @@ class Layer:
 
     @collapse_transformation.setter
     def collapse_transformation(self, value: bool) -> None:
-        self._write_flag('continuously_rasterize', 'continuously_rasterize', value)
+        self._write_flag('continuously_rasterize', 'collapse_transformation', value)
+
+    @_property
+    def frame_blending(self) -> bool:
+        return self._model.frame_blending
+
+    @frame_blending.setter
+    def frame_blending(self, value: bool) -> None:
+        self._write_flag('frame_blending', 'frame_blending', value)
+
+    @_property
+    def frame_blending_type(self) -> int:
+        return self._model.frame_blending_type
+
+    @frame_blending_type.setter
+    def frame_blending_type(self, value: int) -> None:
+        self._write_flag('frame_blending_type', 'frame_blending_type', bool(value))
+
+    @_property
+    def audio_enabled(self) -> bool:
+        return self._model.audio_enabled
+
+    @audio_enabled.setter
+    def audio_enabled(self, value: bool) -> None:
+        self._write_flag('audio_enabled', 'audio_enabled', value)
+
+    @_property
+    def environment_layer(self) -> bool:
+        return self._model.environment_layer
+
+    @environment_layer.setter
+    def environment_layer(self, value: bool) -> None:
+        self._write_flag('environment_layer', 'environment_layer', value)
+
+    @_property
+    def preserve_transparency(self) -> bool:
+        return self._model.preserve_transparency
+
+    @preserve_transparency.setter
+    def preserve_transparency(self, value: bool) -> None:
+        self._model.preserve_transparency = value
+        self._write_ldta_field('set_layer_preserve_transparency', value)
 
     @_property
     def label(self) -> int:
@@ -554,8 +595,16 @@ class CameraLayer(Layer):
 
 
 class LightLayer(Layer):
-    """Light layer (placeholder for future expansion)."""
-    pass
+    """Light layer."""
+
+    @_property
+    def light_type(self) -> int:
+        return self._model.light_type
+
+    @light_type.setter
+    def light_type(self, value: int) -> None:
+        self._model.light_type = value
+        self._write_ldta_field('set_layer_light_type', value)
 
 
 # Factory
