@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from ._comp import CompItem
 
 # Save builtin property before it gets shadowed by method definitions
-_property = property
+_property: type[property] = property
 
 
 # Layer base class

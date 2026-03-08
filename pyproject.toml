@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "aep-tools"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Parse and modify After Effects project files (.aep/.aepx)"
 readme = "README.md"
 license = "MIT"
@@ -30,7 +30,7 @@ gui = ["PySide6>=6.5"]
 dev = ["pytest>=7.0", "ruff>=0.4"]
 
 [project.scripts]
-aep-parser = "aep_parser.__main__:main"
+aep-tools = "aep_parser.__main__:main"
 
 [project.gui-scripts]
 aep-viewer = "aep_parser.gui:main"

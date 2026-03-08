@@ -10,7 +10,7 @@ try:
 except ImportError:
     _HAS_RUST = False
 
-__version__ = "0.1.0"
+__version__ = "0.1.0a1"
 
 
 class AepParseError(Exception):
