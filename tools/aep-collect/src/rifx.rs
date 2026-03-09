@@ -42,11 +42,11 @@ impl Chunk {
         }
     }
 
-    /// Get mutable children.
-    pub fn children_mut(&mut self) -> &mut Vec<Chunk> {
+    /// Get mutable children (returns None for non-container chunks).
+    pub fn children_mut(&mut self) -> Option<&mut Vec<Chunk>> {
         match &mut self.data {
-            ChunkData::List { children, .. } => children,
-            _ => panic!("not a container chunk"),
+            ChunkData::List { children, .. } => Some(children),
+            _ => None,
         }
     }
 
@@ -57,7 +57,7 @@ impl Chunk {
 
     /// Find first child by effective name (mutable).
     pub fn find_mut(&mut self, name: &[u8; 4]) -> Option<&mut Chunk> {
-        self.children_mut().iter_mut().find(|c| c.name() == name)
+        self.children_mut()?.iter_mut().find(|c| c.name() == name)
     }
 
     /// Get string data.

@@ -81,7 +81,10 @@ pub fn convert_version_only(
             let _ = fs::create_dir_all(dir);
             dir.join(aep_path.file_name().unwrap_or_default())
         } else {
-            aep_path.to_path_buf()
+            // Write next to original with _converted suffix to avoid data loss
+            let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
+            let ext = aep_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            aep_path.with_file_name(format!("{}_converted{}", stem, ext))
         };
 
         let serialized = rifx::serialize(&root, big_endian);
@@ -211,7 +214,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             continue;
         }
 
-        let src_canonical = src.to_string_lossy().to_string();
+        let src_canonical = normalize_path(&src);
 
         // Dedup: if this source was already copied, just rewrite path
         if let Some(existing_dst) = copied_sources.get(&src_canonical) {
@@ -497,7 +500,8 @@ fn rewrite_asset_path(root: &mut Chunk, asset_id: u32, new_path: &str) {
 }
 
 fn rewrite_in_folder(fold: &mut Chunk, asset_id: u32, new_path: &str) {
-    for child in fold.children_mut().iter_mut() {
+    let children = match fold.children_mut() { Some(c) => c, None => return };
+    for child in children.iter_mut() {
         let name = *child.name();
         if &name == b"Item" {
             if let Some(idta) = child.find(b"idta") {
@@ -531,6 +535,15 @@ fn rewrite_item_path(item: &mut Chunk, new_path: &str) {
 }
 
 // File operations
+
+/// Normalize a path for dedup: canonicalize if possible, else lowercase + forward slashes.
+fn normalize_path(path: &Path) -> String {
+    if let Ok(canon) = path.canonicalize() {
+        return canon.to_string_lossy().to_lowercase();
+    }
+    // Fallback for missing files: normalize slashes and case
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
 
 fn sanitize_folder_name(name: &str) -> String {
     let s: String = name.chars().map(|c| match c {
