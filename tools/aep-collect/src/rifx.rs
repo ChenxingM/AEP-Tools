@@ -10,12 +10,10 @@ pub struct Chunk {
 }
 
 pub enum ChunkData {
-    /// Raw binary data (most chunks — idta, sspc, opti, etc.)
+    /// Raw binary data (most chunks — idta, sspc, opti, tdmn, wsnm, etc.)
     Raw(Vec<u8>),
-    /// UTF-8 string (Utf8, alas, tdmn)
+    /// UTF-8 string (Utf8, alas)
     Str(String),
-    /// UTF-16 string (wsnm)
-    Str16(String),
     /// Container with children (LIST, tdsn, fnam, pdnm)
     List {
         list_type: [u8; 4],
@@ -63,7 +61,7 @@ impl Chunk {
     /// Get string data.
     pub fn as_str(&self) -> Option<&str> {
         match &self.data {
-            ChunkData::Str(s) | ChunkData::Str16(s) => Some(s),
+            ChunkData::Str(s) => Some(s),
             _ => None,
         }
     }
@@ -71,7 +69,7 @@ impl Chunk {
     /// Get mutable string reference.
     pub fn as_str_mut(&mut self) -> Option<&mut String> {
         match &mut self.data {
-            ChunkData::Str(s) | ChunkData::Str16(s) => Some(s),
+            ChunkData::Str(s) => Some(s),
             _ => None,
         }
     }
@@ -138,41 +136,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn read_utf8(&mut self, n: usize) -> Result<String, String> {
-        let b = self.read_bytes(n)?;
-        Ok(String::from_utf8_lossy(b).into_owned())
-    }
-
-    fn read_nul_utf8(&mut self, n: usize) -> Result<String, String> {
-        let b = self.read_bytes(n)?;
-        let end = b.iter().position(|&x| x == 0).unwrap_or(b.len());
-        Ok(String::from_utf8_lossy(&b[..end]).into_owned())
-    }
-
-    fn read_utf16(&mut self, n: usize) -> Result<String, String> {
-        let b = self.read_bytes(n)?;
-        if b.len() < 2 {
-            return Ok(String::new());
-        }
-        let (start, le) = if b[0] == 0xFF && b[1] == 0xFE {
-            (2, true)
-        } else if b[0] == 0xFE && b[1] == 0xFF {
-            (2, false)
-        } else {
-            (0, true)
-        };
-        let u16s: Vec<u16> = b[start..]
-            .chunks_exact(2)
-            .map(|c| {
-                if le {
-                    u16::from_le_bytes([c[0], c[1]])
-                } else {
-                    u16::from_be_bytes([c[0], c[1]])
-                }
-            })
-            .collect();
-        Ok(String::from_utf16_lossy(&u16s))
-    }
 }
 
 /// Parse an AEP binary file into a chunk tree.
@@ -215,11 +178,12 @@ pub fn parse_aep(data: &[u8]) -> Result<(Chunk, bool), String> {
 }
 
 fn parse_children(p: &mut Parser, size: usize) -> Result<Vec<Chunk>, String> {
-    let end = p.offset + size;
+    let end = (p.offset + size).min(p.data.len());
     let mut children = Vec::new();
     while p.offset < end && p.remaining() >= 8 {
         children.push(parse_chunk(p)?);
     }
+    p.offset = end; // Clamp to parent boundary
     Ok(children)
 }
 
@@ -239,6 +203,10 @@ fn parse_chunk(p: &mut Parser) -> Result<Chunk, String> {
 
 fn parse_chunk_data(p: &mut Parser, header: [u8; 4], size: usize) -> Result<Chunk, String> {
     if &header == b"LIST" {
+        if size < 4 {
+            let raw = p.read_bytes(size)?;
+            return Ok(Chunk { header, data: ChunkData::Raw(raw.to_vec()) });
+        }
         let list_type = p.read_4()?;
 
         // btdk: store as raw bytes
@@ -274,26 +242,15 @@ fn parse_chunk_data(p: &mut Parser, header: [u8; 4], size: usize) -> Result<Chun
 
     match &header {
         b"Utf8" | b"alas" => {
-            let s = p.read_utf8(size)?;
-            Ok(Chunk {
-                header,
-                data: ChunkData::Str(s),
-            })
+            let raw = p.read_bytes(size)?;
+            // Only decode as string if valid UTF-8; otherwise store as Raw
+            // to avoid from_utf8_lossy changing byte length with replacement chars
+            match std::str::from_utf8(raw) {
+                Ok(s) => Ok(Chunk { header, data: ChunkData::Str(s.to_string()) }),
+                Err(_) => Ok(Chunk { header, data: ChunkData::Raw(raw.to_vec()) }),
+            }
         }
-        b"tdmn" => {
-            let s = p.read_nul_utf8(size)?;
-            Ok(Chunk {
-                header,
-                data: ChunkData::Str(s),
-            })
-        }
-        b"wsnm" => {
-            let s = p.read_utf16(size)?;
-            Ok(Chunk {
-                header,
-                data: ChunkData::Str16(s),
-            })
-        }
+        // All other chunks: store raw bytes for perfect round-trip
         _ => {
             let raw = p.read_bytes(size)?;
             Ok(Chunk {
@@ -369,30 +326,10 @@ fn write_chunk(buf: &mut Vec<u8>, chunk: &Chunk, big_endian: bool) {
             }
         }
         ChunkData::Str(s) => {
-            let encoded = if &chunk.header == b"tdmn" {
-                // Null-terminated, padded to original length
-                let mut b = s.as_bytes().to_vec();
-                b.push(0);
-                // tdmn chunks are typically 32 or 40 bytes
-                b
-            } else {
-                s.as_bytes().to_vec()
-            };
+            let encoded = s.as_bytes();
             buf.extend_from_slice(&chunk.header);
             buf.extend_from_slice(&pack_u32(encoded.len() as u32, big_endian));
-            buf.extend_from_slice(&encoded);
-            if encoded.len() % 2 == 1 {
-                buf.push(0);
-            }
-        }
-        ChunkData::Str16(s) => {
-            let encoded: Vec<u8> = s
-                .encode_utf16()
-                .flat_map(|c| c.to_le_bytes())
-                .collect();
-            buf.extend_from_slice(&chunk.header);
-            buf.extend_from_slice(&pack_u32(encoded.len() as u32, big_endian));
-            buf.extend_from_slice(&encoded);
+            buf.extend_from_slice(encoded);
             if encoded.len() % 2 == 1 {
                 buf.push(0);
             }

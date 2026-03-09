@@ -256,6 +256,9 @@ impl App {
             match msg {
                 ProgressMsg::Info(text) => {
                     self.console_lines.push(text);
+                    if self.console_lines.len() > 5000 {
+                        self.console_lines.drain(..1000);
+                    }
                 }
                 ProgressMsg::FileStart { file_idx, file_total, name } => {
                     self.file_current = file_idx + 1;
@@ -271,6 +274,9 @@ impl App {
                 }
                 ProgressMsg::Asset { current, total, text } => {
                     self.console_lines.push(format!("  {}", text));
+                    if self.console_lines.len() > 5000 {
+                        self.console_lines.drain(..1000);
+                    }
                     self.asset_current = current;
                     self.asset_total = total;
                     if total > 0 {
@@ -291,8 +297,8 @@ impl App {
                 }
                 ProgressMsg::Error(text) => {
                     self.console_lines.push(format!("ERROR: {}", text));
-                    self.running = false;
-                    self.done = true;
+                    // Don't stop — per-file errors should not halt the batch.
+                    // AllDone will signal completion.
                 }
             }
         }
@@ -302,8 +308,13 @@ impl App {
         self.current_version_label.clear();
         if let Some(path) = self.queued_files.first() {
             if path.is_file() {
-                if let Ok(data) = std::fs::read(path) {
-                    if let Ok((root, _)) = crate::rifx::parse_aep(&data) {
+                // Read only first 8KB — head chunk is near the beginning
+                use std::io::Read;
+                let mut buf = vec![0u8; 8192];
+                if let Ok(mut f) = std::fs::File::open(path) {
+                    let n = f.read(&mut buf).unwrap_or(0);
+                    buf.truncate(n);
+                    if let Ok((root, _)) = crate::rifx::parse_aep(&buf) {
                         if let Some(ver) = version::read_version(&root) {
                             self.current_version_label = ver.label();
                         }

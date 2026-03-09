@@ -79,7 +79,15 @@ pub fn convert_version_only(
 
         let out_path = if let Some(dir) = output_dir {
             let _ = fs::create_dir_all(dir);
-            dir.join(aep_path.file_name().unwrap_or_default())
+            let candidate = dir.join(aep_path.file_name().unwrap_or_default());
+            // Avoid overwriting original if output_dir is the same as source dir
+            if candidate.canonicalize().ok() == aep_path.canonicalize().ok() {
+                let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
+                let ext = aep_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                dir.join(format!("{}_converted{}", stem, ext))
+            } else {
+                candidate
+            }
         } else {
             // Write next to original with _converted suffix to avoid data loss
             let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -116,7 +124,15 @@ pub fn collect_batch(files: &[PathBuf], output_base: &Path,
         }
         let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
         let name = aep_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let output_dir = output_base.join(format!("{}_collected", stem));
+        let mut output_dir = output_base.join(format!("{}_collected", stem));
+        // Disambiguate if another file with the same stem already produced this dir
+        {
+            let mut counter = 2u32;
+            while output_dir.exists() && counter < 1000 {
+                output_dir = output_base.join(format!("{}_collected_{}", stem, counter));
+                counter += 1;
+            }
+        }
         let _ = tx.send(ProgressMsg::FileStart { file_idx: i, file_total: total, name });
 
         let opts = CollectOptions {
@@ -228,7 +244,12 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             let seq_subdir = target_dir.join(sanitize_folder_name(
                 src.file_name().unwrap_or_default().to_str().unwrap_or("seq"),
             ));
-            let _ = fs::create_dir_all(&seq_subdir);
+            if let Err(e) = fs::create_dir_all(&seq_subdir) {
+                errors += 1;
+                let msg = format!("[ERR] {}/{}: mkdir: {}", folder_display, asset.name, e);
+                let _ = tx.send(ProgressMsg::Asset { current: idx + 1, total, text: msg });
+                continue;
+            }
             match copy_dir_contents(&src, &seq_subdir) {
                 Ok((count, bytes)) => {
                     let new_path = seq_subdir.to_string_lossy().to_string();
@@ -260,12 +281,17 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
 
         // File-based sequence (only for image types like TPIC, not MOoV/8BPS/STIL)
         let is_image_type = &asset.opti_type == b"TPIC";
-        if is_image_type {
+        if is_image_type && src.is_file() {
         if let Some(seq_files) = find_sequence_files(&src) {
             let parent_name = src.parent().and_then(|p| p.file_name())
                 .unwrap_or_default().to_string_lossy();
             let seq_subdir = target_dir.join(sanitize_folder_name(&parent_name));
-            let _ = fs::create_dir_all(&seq_subdir);
+            if let Err(e) = fs::create_dir_all(&seq_subdir) {
+                errors += 1;
+                let msg = format!("[ERR] {}/{}: mkdir: {}", folder_display, asset.name, e);
+                let _ = tx.send(ProgressMsg::Asset { current: idx + 1, total, text: msg });
+                continue;
+            }
             match copy_files(&seq_files, &seq_subdir) {
                 Ok((count, bytes)) => {
                     let new_path = seq_subdir.join(src.file_name().unwrap_or_default())
@@ -348,8 +374,17 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
         }
     }
 
-    // Save modified AEP
-    let out_aep = output_dir.join(aep_path.file_name().unwrap_or_default());
+    // Save modified AEP (avoid overwriting original if output_dir is the source dir)
+    let out_aep = {
+        let candidate = output_dir.join(aep_path.file_name().unwrap_or_default());
+        if candidate.canonicalize().ok() == aep_path.canonicalize().ok() {
+            let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
+            let ext = aep_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            output_dir.join(format!("{}_collected{}", stem, ext))
+        } else {
+            candidate
+        }
+    };
     let serialized = rifx::serialize(&root, big_endian);
     if let Err(e) = fs::write(&out_aep, serialized) {
         let _ = tx.send(ProgressMsg::Error(format!("Cannot write: {}", e)));
@@ -432,11 +467,12 @@ fn process_item(item: &Chunk, folder_path: &mut Vec<String>, assets: &mut Vec<As
     match item_type {
         1 => {
             let name = get_item_name(item);
-            if !name.is_empty() { folder_path.push(name); }
+            let pushed = !name.is_empty();
+            if pushed { folder_path.push(name); }
             if let Some(sfdr) = item.find(b"Sfdr") {
                 scan_folder(sfdr, folder_path, assets);
             }
-            if !folder_path.is_empty() { folder_path.pop(); }
+            if pushed { folder_path.pop(); }
         }
         7 => {
             let name = get_item_name(item);
@@ -459,15 +495,32 @@ fn get_item_name(item: &Chunk) -> String {
         if &child.header == b"Utf8" {
             if let Some(s) = child.as_str() { return s.to_string(); }
         }
+        // Newer AEP versions wrap names in tdsn/fnam containers
+        if &child.header == b"tdsn" || &child.header == b"fnam" {
+            for sub in child.children() {
+                if &sub.header == b"Utf8" {
+                    if let Some(s) = sub.as_str() { return s.to_string(); }
+                }
+            }
+        }
     }
     String::new()
 }
 
 fn get_opti_type(pin: &Chunk) -> [u8; 4] {
     if let Some(opti) = pin.find(b"opti") {
+        // Direct raw data
         if let Some(data) = opti.as_bytes() {
             if data.len() >= 4 {
                 return [data[0], data[1], data[2], data[3]];
+            }
+        }
+        // LIST opti — type tag is in first child's raw data
+        for child in opti.children() {
+            if let Some(data) = child.as_bytes() {
+                if data.len() >= 4 {
+                    return [data[0], data[1], data[2], data[3]];
+                }
             }
         }
     }
@@ -475,12 +528,7 @@ fn get_opti_type(pin: &Chunk) -> [u8; 4] {
 }
 
 fn is_solid(pin: &Chunk) -> bool {
-    if let Some(opti) = pin.find(b"opti") {
-        if let Some(data) = opti.as_bytes() {
-            if data.len() >= 4 { return &data[0..4] == b"Soli"; }
-        }
-    }
-    false
+    get_opti_type(pin) == *b"Soli"
 }
 
 fn get_asset_path(pin: &Chunk) -> Option<String> {
@@ -527,7 +575,20 @@ fn rewrite_item_path(item: &mut Chunk, new_path: &str) {
     let alas = match als2.find_mut(b"alas") { Some(c) => c, None => return };
     let json_str = match alas.as_str() { Some(s) => s.to_string(), None => return };
     if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+        let p = Path::new(new_path);
         json["fullpath"] = serde_json::Value::String(new_path.to_string());
+        if let Some(parent) = p.parent() {
+            if json.get("basedir").is_some() {
+                json["basedir"] = serde_json::Value::String(
+                    format!("{}\\", parent.to_string_lossy()));
+            }
+        }
+        if let Some(fname) = p.file_name() {
+            if json.get("filename").is_some() {
+                json["filename"] = serde_json::Value::String(
+                    fname.to_string_lossy().to_string());
+            }
+        }
         if let Ok(new_json) = serde_json::to_string(&json) {
             if let Some(s) = alas.as_str_mut() { *s = new_json; }
         }
@@ -550,12 +611,13 @@ fn sanitize_folder_name(name: &str) -> String {
         '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
         _ => c,
     }).collect();
-    s.trim_matches(|c: char| c == '.' || c == ' ').to_string()
+    let trimmed = s.trim_matches(|c: char| c == '.' || c == ' ');
+    if trimmed.is_empty() { "_".to_string() } else { trimmed.to_string() }
 }
 
 fn copy_single_file(src: &Path, dst: &Path) -> Result<u64, io::Error> {
-    if !dst.exists() { fs::copy(src, dst)?; }
-    Ok(src.metadata()?.len())
+    if dst.exists() { return Ok(0); }
+    fs::copy(src, dst)
 }
 
 fn copy_dir_contents(src_dir: &Path, dst_dir: &Path) -> Result<(usize, u64), io::Error> {
@@ -567,7 +629,7 @@ fn copy_dir_contents(src_dir: &Path, dst_dir: &Path) -> Result<(usize, u64), io:
     for entry in entries {
         let src = entry.path();
         let dst = dst_dir.join(entry.file_name());
-        if !dst.exists() { if fs::copy(&src, &dst).is_err() { continue; } }
+        if !dst.exists() { fs::copy(&src, &dst)?; }
         if let Ok(meta) = src.metadata() { total += meta.len(); }
         count += 1;
     }
@@ -579,7 +641,7 @@ fn copy_files(files: &[PathBuf], dst_dir: &Path) -> Result<(usize, u64), io::Err
     let mut total = 0u64;
     for src in files {
         let dst = dst_dir.join(src.file_name().unwrap_or_default());
-        if !dst.exists() { if fs::copy(src, &dst).is_err() { continue; } }
+        if !dst.exists() { fs::copy(src, &dst)?; }
         if let Ok(meta) = src.metadata() { total += meta.len(); }
         count += 1;
     }
@@ -696,23 +758,34 @@ fn generate_report(
 }
 
 fn timestamp_now() -> String {
-    use std::time::SystemTime;
-    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let days = secs / 86400;
-    let ds = secs % 86400;
-    let (h, m, s) = (ds / 3600, (ds % 3600) / 60, ds % 60);
-    let mut y = 1970i64;
-    let mut rem = days as i64;
-    loop {
-        let dy = if is_leap(y) { 366 } else { 365 };
-        if rem < dy { break; }
-        rem -= dy; y += 1;
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct SystemTime { y: u16, mo: u16, _dow: u16, d: u16, h: u16, m: u16, s: u16, _ms: u16 }
+        extern "system" { fn GetLocalTime(lp: *mut SystemTime); }
+        let mut t = SystemTime { y: 0, mo: 0, _dow: 0, d: 0, h: 0, m: 0, s: 0, _ms: 0 };
+        unsafe { GetLocalTime(&mut t); }
+        format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", t.y, t.mo, t.d, t.h, t.m, t.s)
     }
-    let md = if is_leap(y) { [31,29,31,30,31,30,31,31,30,31,30,31] }
-             else { [31,28,31,30,31,30,31,31,30,31,30,31] };
-    let mut mo = 1;
-    for &d in &md { if rem < d { break; } rem -= d; mo += 1; }
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, rem + 1, h, m, s)
+    #[cfg(not(windows))]
+    {
+        use std::time::SystemTime as StdTime;
+        let secs = StdTime::now().duration_since(StdTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let days = secs / 86400;
+        let ds = secs % 86400;
+        let (h, m, s) = (ds / 3600, (ds % 3600) / 60, ds % 60);
+        let mut y = 1970i64;
+        let mut rem = days as i64;
+        loop {
+            let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+            if rem < dy { break; }
+            rem -= dy; y += 1;
+        }
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let md = if leap { [31,29,31,30,31,30,31,31,30,31,30,31] }
+                 else { [31,28,31,30,31,30,31,31,30,31,30,31] };
+        let mut mo = 1;
+        for &d in &md { if rem < d { break; } rem -= d; mo += 1; }
+        format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", y, mo, rem + 1, h, m, s)
+    }
 }
-
-fn is_leap(y: i64) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
