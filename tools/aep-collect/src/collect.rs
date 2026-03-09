@@ -172,11 +172,14 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
     let assets = extract_assets(&root);
     let total = assets.len();
     let mut copied = 0usize;
+    let mut skipped_dup = 0usize;
     let mut missing = 0usize;
     let mut errors = 0usize;
     let mut total_bytes = 0u64;
     let mut report_entries: Vec<ReportEntry> = Vec::new();
     let mut seen_destinations: HashMap<String, usize> = HashMap::new();
+    // source path -> destination path (for deduplication)
+    let mut copied_sources: HashMap<String, String> = HashMap::new();
 
     let _ = tx.send(ProgressMsg::Info(format!("Assets: {}  Output: {}", total, output_dir.display())));
 
@@ -208,6 +211,15 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             continue;
         }
 
+        let src_canonical = src.to_string_lossy().to_string();
+
+        // Dedup: if this source was already copied, just rewrite path
+        if let Some(existing_dst) = copied_sources.get(&src_canonical) {
+            rewrite_asset_path(&mut root, asset.id, existing_dst);
+            skipped_dup += 1;
+            continue;
+        }
+
         // Directory-based sequence
         if src.is_dir() {
             let seq_subdir = target_dir.join(sanitize_folder_name(
@@ -218,6 +230,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
                 Ok((count, bytes)) => {
                     let new_path = seq_subdir.to_string_lossy().to_string();
                     rewrite_asset_path(&mut root, asset.id, &new_path);
+                    copied_sources.insert(src_canonical.clone(), new_path.clone());
                     total_bytes += bytes;
                     copied += 1;
                     let msg = format!("[OK] [SEQ] {}/{} ({} files)", folder_display, asset.name, count);
@@ -242,7 +255,9 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             continue;
         }
 
-        // File-based sequence
+        // File-based sequence (only for image types like TPIC, not MOoV/8BPS/STIL)
+        let is_image_type = &asset.opti_type == b"TPIC";
+        if is_image_type {
         if let Some(seq_files) = find_sequence_files(&src) {
             let parent_name = src.parent().and_then(|p| p.file_name())
                 .unwrap_or_default().to_string_lossy();
@@ -253,6 +268,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
                     let new_path = seq_subdir.join(src.file_name().unwrap_or_default())
                         .to_string_lossy().to_string();
                     rewrite_asset_path(&mut root, asset.id, &new_path);
+                    copied_sources.insert(src_canonical.clone(), new_path.clone());
                     total_bytes += bytes;
                     copied += 1;
                     let msg = format!("[OK] [SEQ] {}/{} ({} files)", folder_display, asset.name, count);
@@ -276,6 +292,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             }
             continue;
         }
+        } // is_image_type
 
         // Single file
         if src.is_file() {
@@ -293,6 +310,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
                 Ok(bytes) => {
                     let new_path = dst.to_string_lossy().to_string();
                     rewrite_asset_path(&mut root, asset.id, &new_path);
+                    copied_sources.insert(src_canonical, new_path.clone());
                     total_bytes += bytes;
                     copied += 1;
                     let mb = bytes as f64 / (1024.0 * 1024.0);
@@ -347,9 +365,10 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
     let _ = fs::write(&report_path, &report);
 
     let size_mb = total_bytes as f64 / (1024.0 * 1024.0);
+    let dup_info = if skipped_dup > 0 { format!(", {} dedup", skipped_dup) } else { String::new() };
     let _ = tx.send(ProgressMsg::Info(format!(
-        "Done: {} copied, {} missing, {} errors  ({:.1} MB, {:.1}s)",
-        copied, missing, errors, size_mb, elapsed
+        "Done: {} copied, {} missing, {} errors{}  ({:.1} MB, {:.1}s)",
+        copied, missing, errors, dup_info, size_mb, elapsed
     )));
 }
 
@@ -387,6 +406,7 @@ struct AssetInfo {
     name: String,
     full_path: String,
     folder_path: Vec<String>,
+    opti_type: [u8; 4],  // e.g. b"TPIC", b"MOoV", b"8BPS", b"STIL"
 }
 
 fn scan_folder(fold: &Chunk, folder_path: &mut Vec<String>, assets: &mut Vec<AssetInfo>) {
@@ -419,9 +439,10 @@ fn process_item(item: &Chunk, folder_path: &mut Vec<String>, assets: &mut Vec<As
             let name = get_item_name(item);
             if let Some(pin) = item.find(b"Pin ") {
                 if is_solid(pin) { return; }
+                let opti_type = get_opti_type(pin);
                 if let Some(path) = get_asset_path(pin) {
                     if !path.is_empty() {
-                        assets.push(AssetInfo { id: item_id, name, full_path: path, folder_path: folder_path.clone() });
+                        assets.push(AssetInfo { id: item_id, name, full_path: path, folder_path: folder_path.clone(), opti_type });
                     }
                 }
             }
@@ -437,6 +458,17 @@ fn get_item_name(item: &Chunk) -> String {
         }
     }
     String::new()
+}
+
+fn get_opti_type(pin: &Chunk) -> [u8; 4] {
+    if let Some(opti) = pin.find(b"opti") {
+        if let Some(data) = opti.as_bytes() {
+            if data.len() >= 4 {
+                return [data[0], data[1], data[2], data[3]];
+            }
+        }
+    }
+    [0; 4]
 }
 
 fn is_solid(pin: &Chunk) -> bool {
