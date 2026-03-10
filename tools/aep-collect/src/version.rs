@@ -8,7 +8,6 @@ pub struct AeVersion {
     pub major: u32,
     pub minor: u32,
     pub patch: u32,
-    pub _build: u32,
     pub os_code: u32,
     pub beta: bool,
 }
@@ -37,24 +36,15 @@ impl AeVersion {
     }
 }
 
-/// Known AE versions: (raw_version_id, display_label).
-pub const KNOWN_VERSIONS: &[(u32, &str)] = &[
-    (0x0B3B2E04, "23.6.5 (2023)"),
-    (0x0F000604, "24.0 (2024)"),
-    (0x0F008604, "24.1"),
-    (0x0F010604, "24.2"),
-    (0x0F018604, "24.3"),
-    (0x0F020604, "24.4"),
-    (0x0F028604, "24.5"),
-    (0x0F030604, "24.6"),
-    (0x0F080604, "25.0 (2025)"),
-    (0x0F088604, "25.1"),
-    (0x0F090604, "25.2"),
-    (0x0F098604, "25.3"),
-    (0x0F0A0604, "25.4"),
-    (0x0F0A8604, "25.5"),
-    (0x0F0B0604, "25.6"),
-    (0x0F100604, "26.0 (2026)"),
+/// Known AE versions: (head[0..8] bytes, display_label).
+/// head[0:2] = format_major (u16 BE), head[2:4] = format_sub (u16 BE), head[4:8] = version_id (u32 BE).
+/// Values extracted from real AEP files saved by each AE version.
+pub const KNOWN_VERSIONS: &[([u8; 8], &str)] = &[
+    ([0x00, 0x5E, 0x00, 0x09, 0x0B, 0x3B, 0x06, 0x37], "23.6 (2023)"),
+    ([0x00, 0x5F, 0x00, 0x06, 0x0F, 0x03, 0x06, 0x41], "24.6 (2024)"),
+    ([0x00, 0x60, 0x00, 0x01, 0x0F, 0x08, 0x86, 0x44], "25.1 (2025)"),
+    ([0x00, 0x60, 0x00, 0x06, 0x0F, 0x0A, 0x06, 0x56], "25.4"),
+    ([0x00, 0x61, 0x00, 0x02, 0x0F, 0x10, 0x06, 0x43], "26.0 (2026)"),
 ];
 
 /// Decode version_id bit fields.
@@ -65,20 +55,16 @@ pub fn decode_version_id(vid: u32) -> AeVersion {
     let minor = (vid >> 15) & 0x0F;
     let patch = (vid >> 11) & 0x0F;
     let beta_flag = (vid >> 9) & 0x01;
-    let build = vid & 0xFF;
     let major = maj_a * 8 + maj_b;
 
     AeVersion {
         major,
         minor,
         patch,
-        _build: build,
         os_code,
         beta: beta_flag == 0,
     }
 }
-
-
 
 /// Read AE version from chunk tree.
 pub fn read_version(root: &Chunk) -> Option<AeVersion> {
@@ -91,24 +77,13 @@ pub fn read_version(root: &Chunk) -> Option<AeVersion> {
     Some(decode_version_id(vid))
 }
 
-/// Write a raw version_id to chunk tree (head and svap chunks).
-pub fn write_version(root: &mut Chunk, vid: u32) {
-    let vid_bytes = vid.to_be_bytes();
-
-    // Update head chunk [4:8]
+/// Write version to chunk tree: head[0..8] (format version + version_id).
+/// svap is intentionally NOT modified — it stores "last saved by" which is unrelated.
+pub fn write_version(root: &mut Chunk, head_bytes: &[u8; 8]) {
     if let Some(head) = root.find_mut(b"head") {
         if let Some(data) = head.as_bytes_mut() {
             if data.len() >= 8 {
-                data[4..8].copy_from_slice(&vid_bytes);
-            }
-        }
-    }
-
-    // Update svap chunk (4 bytes = version_id)
-    if let Some(svap) = root.find_mut(b"svap") {
-        if let Some(data) = svap.as_bytes_mut() {
-            if data.len() >= 4 {
-                data[0..4].copy_from_slice(&vid_bytes);
+                data[..8].copy_from_slice(head_bytes);
             }
         }
     }

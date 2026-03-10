@@ -33,20 +33,22 @@ pub enum ProgressMsg {
 pub struct CollectOptions {
     pub aep_path: PathBuf,
     pub output_dir: PathBuf,
-    /// Raw version_id to write. None = keep original version.
-    pub target_version: Option<u32>,
+    /// Target head[0..8] bytes (format version + version_id). None = keep original.
+    pub target_version: Option<[u8; 8]>,
 }
 
 /// Convert version only (no asset collection). Writes modified AEP next to original with _converted suffix,
 /// or into output_dir if provided.
 pub fn convert_version_only(
-    files: &[PathBuf], target_vid: u32,
+    files: &[PathBuf], target_head: [u8; 8],
     output_dir: Option<&Path>,
     tx: &mpsc::Sender<ProgressMsg>,
     cancel: &Arc<AtomicBool>,
 ) {
+    let target_vid = u32::from_be_bytes([target_head[4], target_head[5], target_head[6], target_head[7]]);
     let target_ver = version::decode_version_id(target_vid);
     let target_label = target_ver.label();
+    let ver_suffix = format!("_v{}", target_ver.display());
     let total = files.len();
 
     for (i, aep_path) in files.iter().enumerate() {
@@ -75,24 +77,14 @@ pub fn convert_version_only(
         let original = version::read_version(&root)
             .map(|v| v.label()).unwrap_or_default();
 
-        version::write_version(&mut root, target_vid);
+        version::write_version(&mut root, &target_head);
 
+        let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let out_path = if let Some(dir) = output_dir {
             let _ = fs::create_dir_all(dir);
-            let candidate = dir.join(aep_path.file_name().unwrap_or_default());
-            // Avoid overwriting original if output_dir is the same as source dir
-            if candidate.canonicalize().ok() == aep_path.canonicalize().ok() {
-                let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
-                let ext = aep_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-                dir.join(format!("{}_converted{}", stem, ext))
-            } else {
-                candidate
-            }
+            dir.join(format!("{}{}.aep", stem, ver_suffix))
         } else {
-            // Write next to original with _converted suffix to avoid data loss
-            let stem = aep_path.file_stem().unwrap_or_default().to_string_lossy();
-            let ext = aep_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-            aep_path.with_file_name(format!("{}_converted{}", stem, ext))
+            aep_path.with_file_name(format!("{}{}.aep", stem, ver_suffix))
         };
 
         let serialized = rifx::serialize(&root, big_endian);
@@ -113,7 +105,7 @@ pub fn convert_version_only(
 
 /// Collect multiple AEP files (batch mode).
 pub fn collect_batch(files: &[PathBuf], output_base: &Path,
-                     target_version: Option<u32>,
+                     target_version: Option<[u8; 8]>,
                      tx: &mpsc::Sender<ProgressMsg>,
                      cancel: &Arc<AtomicBool>) {
     let total = files.len();
@@ -175,8 +167,9 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
         let _ = tx.send(ProgressMsg::Info(format!("Version: {}", original_version)));
     }
 
-    if let Some(target_vid) = opts.target_version {
-        version::write_version(&mut root, target_vid);
+    if let Some(target_head) = &opts.target_version {
+        version::write_version(&mut root, target_head);
+        let target_vid = u32::from_be_bytes([target_head[4], target_head[5], target_head[6], target_head[7]]);
         let target_ver = version::decode_version_id(target_vid);
         converted_version = target_ver.label();
         let _ = tx.send(ProgressMsg::Info(format!("Convert to: {}", converted_version)));

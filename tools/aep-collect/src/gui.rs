@@ -145,7 +145,8 @@ impl App {
                         .to_string_lossy().to_string();
                 }
             } else if let Some(parent) = first.parent() {
-                self.output_path = parent.to_string_lossy().to_string();
+                self.output_path = parent.join("_collected_aeps")
+                    .to_string_lossy().to_string();
             }
         } else if first.is_dir() {
             self.output_path = first.to_string_lossy().to_string();
@@ -171,8 +172,8 @@ impl App {
         self.is_batch = files.len() > 1;
 
         let target_version = if self.convert_version {
-            let (vid, _) = KNOWN_VERSIONS[self.selected_version_idx];
-            Some(vid)
+            let (head_bytes, _) = KNOWN_VERSIONS[self.selected_version_idx];
+            Some(head_bytes)
         } else {
             None
         };
@@ -216,7 +217,7 @@ impl App {
         let files = self.resolve_files();
         if files.is_empty() { return; }
 
-        let (target_vid, _) = KNOWN_VERSIONS[self.selected_version_idx];
+        let (target_head, _) = KNOWN_VERSIONS[self.selected_version_idx];
 
         self.console_lines.clear();
         self.file_progress = 0.0;
@@ -244,7 +245,7 @@ impl App {
 
         thread::spawn(move || {
             collect::convert_version_only(
-                &files, target_vid,
+                &files, target_head,
                 output_dir.as_deref(), &tx, &cancel,
             );
         });
