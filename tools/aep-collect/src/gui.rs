@@ -13,14 +13,31 @@ use crate::version::{self, KNOWN_VERSIONS};
 const WIN_W: f32 = 620.0;
 const WIN_H: f32 = 480.0;
 
+fn load_icon() -> Option<egui::IconData> {
+    let icon_bytes = include_bytes!("../icon.ico");
+    let icon_image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
+    let (width, height) = icon_image.dimensions();
+    Some(egui::IconData {
+        rgba: icon_image.into_raw(),
+        width,
+        height,
+    })
+}
+
 pub fn run_gui() {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(collect::APP_ABOUT)
+        .with_inner_size([WIN_W, WIN_H])
+        .with_min_inner_size([WIN_W, WIN_H])
+        .with_max_inner_size([WIN_W, WIN_H])
+        .with_resizable(false);
+
+    if let Some(icon) = load_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(collect::APP_ABOUT)
-            .with_inner_size([WIN_W, WIN_H])
-            .with_min_inner_size([WIN_W, WIN_H])
-            .with_max_inner_size([WIN_W, WIN_H])
-            .with_resizable(false),
+        viewport,
         ..Default::default()
     };
     let _ = eframe::run_native(collect::APP_ABOUT, options, Box::new(|cc| {
