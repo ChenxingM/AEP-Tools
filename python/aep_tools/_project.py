@@ -766,20 +766,12 @@ def open_aep(path: str | Path) -> Project:
     if len(raw) < 12:
         raise ValueError(f"File too small to be a valid AEP file ({len(raw)} bytes): {p}")
 
-    # Extract trailing data (XMP metadata) after the RIFX chunk
-    import struct as _st
-    try:
-        _rifx_end = 8 + _st.unpack_from(">I", raw, 4)[0]
-    except _st.error:
-        raise ValueError(f"Cannot read RIFF header from: {p}")
-    trailing = raw[_rifx_end:] if _rifx_end < len(raw) else b""
-
     if _HAS_RUST:
-        root_chunk, big_endian = _rust_parse_riff(raw)
+        root_chunk, big_endian, trailing = _rust_parse_riff(raw)
         pp = ProjectParser(big_endian=big_endian)
         model = pp.parse_project(root_chunk)
         return Project(model, str(p), chunk_tree=root_chunk,
-                       big_endian=big_endian, trailing_data=trailing)
+                       big_endian=big_endian, trailing_data=bytes(trailing))
 
     parser = AepChunkParser(raw, 0, True)
     root_chunk = parser.parse()
@@ -787,7 +779,7 @@ def open_aep(path: str | Path) -> Project:
     pp = ProjectParser(big_endian=big_endian)
     model = pp.parse_project(root_chunk)
     return Project(model, str(p), chunk_tree=root_chunk,
-                   big_endian=big_endian, trailing_data=trailing)
+                   big_endian=big_endian, trailing_data=parser.trailing_data)
 
 
 def open_aepx(path: str | Path) -> Project:

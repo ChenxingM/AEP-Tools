@@ -155,41 +155,10 @@ impl<'a> Parser<'a> {
         Ok(s)
     }
 
-    fn read_string_utf8(&mut self, n: usize) -> PyResult<String> {
-        let bytes = self.read_bytes(n)?;
-        Ok(String::from_utf8_lossy(bytes).into_owned())
-    }
-
     fn read_nul_string_utf8(&mut self, n: usize) -> PyResult<String> {
         let bytes = self.read_bytes(n)?;
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
-    }
-
-    fn read_string_utf16(&mut self, n: usize) -> PyResult<String> {
-        let bytes = self.read_bytes(n)?;
-        if bytes.len() < 2 {
-            return Ok(String::new());
-        }
-        let (start, is_le) = if bytes[0] == 0xFF && bytes[1] == 0xFE {
-            (2, true)
-        } else if bytes[0] == 0xFE && bytes[1] == 0xFF {
-            (2, false)
-        } else {
-            (0, true)
-        };
-        let slice = &bytes[start..];
-        let u16s: Vec<u16> = slice
-            .chunks_exact(2)
-            .map(|c| {
-                if is_le {
-                    u16::from_le_bytes([c[0], c[1]])
-                } else {
-                    u16::from_be_bytes([c[0], c[1]])
-                }
-            })
-            .collect();
-        Ok(String::from_utf16_lossy(&u16s))
     }
 
     fn parse_aep(&mut self, py: Python<'_>) -> PyResult<(Py<Chunk>, bool)> {
@@ -233,12 +202,13 @@ impl<'a> Parser<'a> {
         list_type: &str,
         size: usize,
     ) -> PyResult<Py<ChunkList>> {
-        let end = self.offset + size;
+        let end = (self.offset + size).min(self.data.len());
         let children = PyList::empty(py);
-        while self.offset < end {
+        while self.offset < end && (self.data.len() - self.offset) >= 8 {
             let chunk = self.parse_chunk(py)?;
             children.append(chunk)?;
         }
+        self.offset = end; // Clamp to parent boundary
         Py::new(
             py,
             ChunkList {
@@ -267,6 +237,13 @@ impl<'a> Parser<'a> {
         size: usize,
     ) -> PyResult<Py<Chunk>> {
         if header == "LIST" {
+            if size < 4 {
+                let raw = self.read_bytes(size)?;
+                return Py::new(py, Chunk {
+                    header: header.to_string(), length: size,
+                    data: PyBytes::new(py, raw).into_any().unbind(),
+                });
+            }
             let list_type = self.read_id()?.to_string();
 
             // btdk: read as raw bytes (COS text data)
@@ -295,15 +272,12 @@ impl<'a> Parser<'a> {
 
         match header {
             "Utf8" | "alas" => {
-                let s = self.read_string_utf8(size)?;
-                Py::new(
-                    py,
-                    Chunk {
-                        header: header.to_string(),
-                        length: size,
-                        data: s.into_pyobject(py)?.into_any().unbind(),
-                    },
-                )
+                let raw = self.read_bytes(size)?;
+                let data = match str::from_utf8(raw) {
+                    Ok(s) => s.into_pyobject(py)?.into_any().unbind(),
+                    Err(_) => PyBytes::new(py, raw).into_any().unbind(),
+                };
+                Py::new(py, Chunk { header: header.to_string(), length: size, data })
             }
             "tdmn" => {
                 let s = self.read_nul_string_utf8(size)?;
@@ -316,17 +290,7 @@ impl<'a> Parser<'a> {
                     },
                 )
             }
-            "wsnm" => {
-                let s = self.read_string_utf16(size)?;
-                Py::new(
-                    py,
-                    Chunk {
-                        header: header.to_string(),
-                        length: size,
-                        data: s.into_pyobject(py)?.into_any().unbind(),
-                    },
-                )
-            }
+            // wsnm: store raw bytes for perfect round-trip
             "tdsn" | "fnam" | "pdnm" => {
                 let cl = self.parse_chunk_list(py, "", size)?;
                 Py::new(
@@ -355,11 +319,14 @@ impl<'a> Parser<'a> {
 
 // ── Public Python API ───────────────────────────────────────────────────────
 
-/// Parse an AEP binary file. Returns (root_chunk, big_endian).
+/// Parse an AEP binary file. Returns (root_chunk, big_endian, trailing_data).
 #[pyfunction]
-fn parse_riff(py: Python<'_>, data: &[u8]) -> PyResult<(Py<Chunk>, bool)> {
+fn parse_riff(py: Python<'_>, data: &[u8]) -> PyResult<(Py<Chunk>, bool, PyObject)> {
     let mut parser = Parser::new(data);
-    parser.parse_aep(py)
+    let (root, big_endian) = parser.parse_aep(py)?;
+    let trailing = &data[parser.offset..];
+    let trailing_py = PyBytes::new(py, trailing).into_any().unbind();
+    Ok((root, big_endian, trailing_py))
 }
 
 #[pymodule]

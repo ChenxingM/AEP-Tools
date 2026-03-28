@@ -19,6 +19,6 @@ class Chunk:
     @property
     def list(self) -> ChunkList: ...
 
-def parse_riff(data: bytes) -> tuple[Chunk, bool]:
-    """Parse a RIFF/RIFX binary buffer. Returns (root_chunk, big_endian)."""
+def parse_riff(data: bytes) -> tuple[Chunk, bool, bytes]:
+    """Parse a RIFF/RIFX binary buffer. Returns (root_chunk, big_endian, trailing_data)."""
     ...

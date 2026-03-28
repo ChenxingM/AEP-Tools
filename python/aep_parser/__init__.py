@@ -33,7 +33,7 @@ def parse_aep(data: bytes):
         raise AepParseError("File is too small to be a valid AEP file.")
     try:
         if _HAS_RUST:
-            root_chunk, big_endian = _rust_parse_riff(data)
+            root_chunk, big_endian, _trailing = _rust_parse_riff(data)
             pp = ProjectParser(big_endian=big_endian)
             return pp.parse_project(root_chunk)
         parser = AepChunkParser(data, 0, True)
