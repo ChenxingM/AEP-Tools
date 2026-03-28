@@ -91,6 +91,40 @@ if prop.is_time_varying:
 
 > 仅 `.aep` 文件支持写入，`.aepx` 为只读。可通过 `proj.writable` 检查。
 
+### 图层增删复制移动
+
+```python
+comp = proj.compositions[0]
+
+# 添加各种图层
+comp.add_solid("Red Solid", color=(1.0, 0.0, 0.0))      # 纯色
+comp.add_null("Null Object")                              # 空对象
+comp.add_adjustment("Adjustment")                         # 调整图层
+comp.add_shape("Shape Layer")                             # 形状图层
+comp.add_text("Text Layer")                               # 文字图层
+comp.add_camera("Camera")                                 # 摄像机
+comp.add_light("Light")                                   # 灯光
+
+# 删除
+comp.layers[1].remove()           # 删除第 1 个图层
+comp.remove_layer(2)              # 按索引删除
+
+# 复制
+comp.layers[1].duplicate()        # 复制第 1 个图层（副本在原图层下方）
+
+# 移动
+comp.layers[3].move_to(1)         # 移到最上层
+comp.layers[1].move_to_beginning()  # 同上
+comp.layers[1].move_to_end()      # 移到最下层
+
+# 预合成（将指定图层移入新合成）
+lid1 = comp.add_solid("A", color=(1,0,0))
+lid2 = comp.add_solid("B", color=(0,1,0))
+new_comp_id, precomp_layer_id = comp.precompose([lid1, lid2], "PreComp AB")
+
+proj.save("output.aep")
+```
+
 ### 修改图层属性
 
 ```python

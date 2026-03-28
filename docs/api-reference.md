@@ -73,6 +73,22 @@ proj = open_aepx("file.aepx")       # 仅 .aepx
 |------|------|------|
 | `layer(name_or_index)` | `Layer \| None` | 按名称或 1-based 索引查找图层 |
 
+### 图层 CRUD
+
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `add_solid(name, color, width, height)` | `int` | 添加纯色图层，返回 layer_id。color=(r,g,b) 0.0-1.0，width/height 默认合成尺寸 |
+| `add_null(name)` | `int` | 添加空对象图层 |
+| `add_adjustment(name, width, height)` | `int` | 添加调整图层 |
+| `add_shape(name)` | `int` | 添加形状图层 |
+| `add_text(name)` | `int` | 添加文字图层 |
+| `add_camera(name)` | `int` | 添加摄像机图层 |
+| `add_light(name)` | `int` | 添加灯光图层 |
+| `remove_layer(index_or_layer)` | `None` | 删除图层（按 1-based 索引或 Layer 对象） |
+| `duplicate_layer(index_or_layer)` | `Layer` | 复制图层，返回新图层 |
+| `move_layer(index_or_layer, new_index)` | `None` | 移动图层到指定位置 |
+| `precompose(layer_ids, new_comp_name)` | `(int, int)` | 预合成，返回 (new_comp_id, precomp_layer_id) |
+
 ---
 
 ## Layer
@@ -175,6 +191,11 @@ proj = open_aepx("file.aepx")       # 仅 .aepx
 | `layer["name"]` | `Any` | 同上，支持 `[]` 和 `()` 语法 |
 | `effect(name_or_index)` | `Effect \| None` | 按名称或索引查找效果 |
 | `mask(index)` | `Mask \| None` | 按 1-based 索引查找遮罩 |
+| `remove()` | `None` | 从所属合成中删除此图层 |
+| `duplicate()` | `Layer` | 复制此图层，返回副本 |
+| `move_to(index)` | `None` | 移动到指定位置 (1-based) |
+| `move_to_beginning()` | `None` | 移到最上层 |
+| `move_to_end()` | `None` | 移到最下层 |
 
 ### 子类额外属性
 
