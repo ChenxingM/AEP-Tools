@@ -539,6 +539,37 @@ class Layer:
             return masks[idx]
         return None
 
+    # Layer CRUD
+
+    def remove(self) -> None:
+        """Remove this layer from its containing composition."""
+        if self._containing_comp is None:
+            raise RuntimeError("Cannot remove: layer has no containing composition")
+        self._containing_comp.remove_layer(self)
+
+    def duplicate(self) -> Layer:
+        """Duplicate this layer. Returns the new Layer."""
+        if self._containing_comp is None:
+            raise RuntimeError("Cannot duplicate: layer has no containing composition")
+        return self._containing_comp.duplicate_layer(self)
+
+    def move_to(self, index: int) -> None:
+        """Move this layer to a new position (1-based)."""
+        if self._containing_comp is None:
+            raise RuntimeError("Cannot move: layer has no containing composition")
+        self._containing_comp.move_layer(self, index)
+
+    def move_to_beginning(self) -> None:
+        """Move this layer to the top (index 1)."""
+        self.move_to(1)
+
+    def move_to_end(self) -> None:
+        """Move this layer to the bottom."""
+        if self._containing_comp is None:
+            raise RuntimeError("Cannot move: layer has no containing composition")
+        num = self._containing_comp.num_layers
+        self.move_to(num)
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.name!r}, index={self.index})"
 

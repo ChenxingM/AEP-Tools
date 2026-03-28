@@ -319,6 +319,161 @@ class CompItem:
                 return lyr
         return None
 
+    # Layer CRUD
+
+    def _invalidate_layers(self) -> None:
+        self._layers_cache = None
+
+    def add_solid(self, name: str = "Black Solid",
+                  color: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                  width: int | None = None,
+                  height: int | None = None) -> int:
+        """Add a solid layer. Returns the new layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_solid_layer
+        w = width if width is not None else self._model.width
+        h = height if height is not None else self._model.height
+        lid = add_solid_layer(
+            self._project._chunk_tree, self._model.id, name,
+            w, h, color[0], color[1], color[2],
+            self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def remove_layer(self, index_or_layer) -> None:
+        """Remove a layer by 1-based index or Layer object."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot remove layer: project not writable")
+        from ._writer import remove_layer as _remove
+        if isinstance(index_or_layer, int):
+            lyr = self.layer(index_or_layer)
+            if lyr is None:
+                raise IndexError(f"Layer index {index_or_layer} out of range")
+        else:
+            lyr = index_or_layer
+        _remove(self._project._chunk_tree, self._model.id,
+                lyr._model.id, self._project._big_endian)
+        self._invalidate_layers()
+
+    def duplicate_layer(self, index_or_layer) -> Layer:
+        """Duplicate a layer. Returns the new Layer."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot duplicate layer: project not writable")
+        from ._writer import duplicate_layer as _dup
+        if isinstance(index_or_layer, int):
+            lyr = self.layer(index_or_layer)
+            if lyr is None:
+                raise IndexError(f"Layer index {index_or_layer} out of range")
+        else:
+            lyr = index_or_layer
+        new_id = _dup(self._project._chunk_tree, self._model.id,
+                      lyr._model.id, self._project._big_endian)
+        self._invalidate_layers()
+        # Find the new layer
+        for l in self._ensure_layers():
+            if l._model.id == new_id:
+                return l
+        return self.layer(lyr.index + 1)
+
+    def move_layer(self, index_or_layer, new_index: int) -> None:
+        """Move a layer to a new position (1-based)."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot move layer: project not writable")
+        from ._writer import move_layer as _move
+        if isinstance(index_or_layer, int):
+            lyr = self.layer(index_or_layer)
+            if lyr is None:
+                raise IndexError(f"Layer index {index_or_layer} out of range")
+        else:
+            lyr = index_or_layer
+        _move(self._project._chunk_tree, self._model.id,
+              lyr._model.id, new_index, self._project._big_endian)
+        self._invalidate_layers()
+
+    def add_null(self, name: str = "Null 1") -> int:
+        """Add a null object layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_null_layer
+        lid = add_null_layer(self._project._chunk_tree, self._model.id,
+                             name, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def add_adjustment(self, name: str = "Adjustment Layer",
+                       width: int | None = None,
+                       height: int | None = None) -> int:
+        """Add an adjustment layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_adjustment_layer
+        lid = add_adjustment_layer(
+            self._project._chunk_tree, self._model.id, name,
+            width, height, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def add_shape(self, name: str = "Shape Layer") -> int:
+        """Add an empty shape layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_shape_layer
+        lid = add_shape_layer(self._project._chunk_tree, self._model.id,
+                              name, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def add_text(self, name: str = "Text Layer") -> int:
+        """Add a text layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_text_layer
+        lid = add_text_layer(self._project._chunk_tree, self._model.id,
+                             name, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def add_camera(self, name: str = "Camera") -> int:
+        """Add a camera layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_camera_layer
+        lid = add_camera_layer(self._project._chunk_tree, self._model.id,
+                               name, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def add_light(self, name: str = "Light") -> int:
+        """Add a light layer. Returns layer_id."""
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot add layer: project not writable")
+        from ._writer import add_light_layer
+        lid = add_light_layer(self._project._chunk_tree, self._model.id,
+                              name, self._project._big_endian)
+        self._invalidate_layers()
+        return lid
+
+    def precompose(self, layer_ids: list[int],
+                   new_comp_name: str) -> tuple[int, int]:
+        """Precompose layers into a new composition.
+
+        Args:
+            layer_ids: List of layer IDs to precompose.
+            new_comp_name: Name for the new composition.
+
+        Returns:
+            (new_comp_id, precomp_layer_id)
+        """
+        if self._project is None or self._project._chunk_tree is None:
+            raise RuntimeError("Cannot precompose: project not writable")
+        from ._writer import precompose_layers
+        result = precompose_layers(
+            self._project._chunk_tree, self._model.id,
+            layer_ids, new_comp_name, self._project._big_endian)
+        self._invalidate_layers()
+        return result
+
     # Markers
 
     @property
