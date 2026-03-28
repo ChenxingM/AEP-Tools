@@ -82,7 +82,7 @@ def _write_container_chunk(buf: bytearray, chunk: Chunk,
 
 def _write_string_chunk(buf: bytearray, chunk: Chunk,
                         big_endian: bool) -> None:
-    """Write a string chunk (Utf8, alas, tdmn, wsnm)."""
+    """Write a string chunk (Utf8, alas, tdmn)."""
     header = chunk.header
     text = chunk.data
 
@@ -91,8 +91,6 @@ def _write_string_chunk(buf: bytearray, chunk: Chunk,
         if len(encoded) < chunk.length:
             encoded = encoded + b"\x00" * (chunk.length - len(encoded))
         data_bytes = encoded
-    elif header == "wsnm":
-        data_bytes = text.encode("utf-16-le")
     else:
         data_bytes = text.encode("utf-8")
 

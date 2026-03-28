@@ -31,6 +31,7 @@ class RiffParser(BinaryReader):
         self.on_file_start(file_id)
         chunk_list = self._parse_chunk_list(ChunkList(file_id), size - 4)
         root = Chunk(header, size, chunk_list)
+        self.trailing_data = bytes(self._data[self.offset:])
         self.on_file_end(root)
         return root
 
@@ -41,12 +42,11 @@ class RiffParser(BinaryReader):
         pass
 
     def _parse_chunk_list(self, cl: ChunkList, size: int) -> ChunkList:
-        end = self.offset + size
-        while self.offset < end:
+        end = min(self.offset + size, len(self._data))
+        while self.offset < end and self.remaining() >= 8:
             chunk = self._parse_chunk()
             cl.children.append(chunk)
-        if self.offset > end:
-            raise ValueError("Chunk overflows its container")
+        self.offset = end  # Clamp to parent boundary
         return cl
 
     def _parse_chunk(self) -> Chunk:
@@ -62,6 +62,8 @@ class RiffParser(BinaryReader):
 
     def _parse_chunk_data(self, header: str, size: int) -> Chunk:
         if header == "LIST":
+            if size < 4:
+                return Chunk(header, size, self.read_bytes(size))
             list_type = self.read_id()
             custom = self.custom_parse_list(header, size, list_type)
             if custom is not None:
@@ -91,11 +93,14 @@ class AepChunkParser(RiffParser):
 
     def custom_parse_chunk(self, header: str, size: int) -> Chunk | None:
         if header in ("Utf8", "alas"):
-            return Chunk(header, size, self.read_string("utf-8", size))
+            raw = self.read_bytes(size)
+            try:
+                return Chunk(header, size, raw.decode("utf-8"))
+            except UnicodeDecodeError:
+                return Chunk(header, size, raw)  # Store raw for round-trip safety
         if header == "tdmn":
             return Chunk(header, size, self.read_nul_string("utf-8", size))
-        if header == "wsnm":
-            return Chunk(header, size, self.read_string("utf-16", size))
+        # wsnm: store raw bytes for perfect round-trip (not read by Python code)
         if header in ("tdsn", "fnam", "pdnm"):
             cl = self._parse_chunk_list(ChunkList(""), size)
             return Chunk(header, size, cl)
