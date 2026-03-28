@@ -181,8 +181,17 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
         return;
     }
 
+    let (volume_label, server_name) = get_volume_and_host(output_dir);
+
     let assets = extract_assets(&root);
     let total = assets.len();
+
+    // Build set of all asset source paths for sequence detection disambiguation
+    use std::collections::HashSet;
+    let asset_path_set: HashSet<String> = assets.iter()
+        .map(|a| normalize_path(&PathBuf::from(&a.full_path)))
+        .collect();
+
     let mut copied = 0usize;
     let mut skipped_dup = 0usize;
     let mut missing = 0usize;
@@ -190,8 +199,8 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
     let mut total_bytes = 0u64;
     let mut report_entries: Vec<ReportEntry> = Vec::new();
     let mut seen_destinations: HashMap<String, usize> = HashMap::new();
-    // source path -> destination path (for deduplication)
-    let mut copied_sources: HashMap<String, String> = HashMap::new();
+    // source path -> (destination path, is_folder) for deduplication
+    let mut copied_sources: HashMap<String, (String, bool)> = HashMap::new();
 
     let _ = tx.send(ProgressMsg::Info(format!("Assets: {}  Output: {}", total, output_dir.display())));
 
@@ -226,8 +235,8 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
         let src_canonical = normalize_path(&src);
 
         // Dedup: if this source was already copied, just rewrite path
-        if let Some(existing_dst) = copied_sources.get(&src_canonical) {
-            rewrite_asset_path(&mut root, asset.id, existing_dst);
+        if let Some((existing_dst, existing_is_folder)) = copied_sources.get(&src_canonical) {
+            rewrite_asset_path(&mut root, asset.id, existing_dst, output_dir, *existing_is_folder, &volume_label, &server_name);
             skipped_dup += 1;
             continue;
         }
@@ -246,8 +255,8 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             match copy_dir_contents(&src, &seq_subdir) {
                 Ok((count, bytes)) => {
                     let new_path = seq_subdir.to_string_lossy().to_string();
-                    rewrite_asset_path(&mut root, asset.id, &new_path);
-                    copied_sources.insert(src_canonical.clone(), new_path.clone());
+                    rewrite_asset_path(&mut root, asset.id, &new_path, output_dir, true, &volume_label, &server_name);
+                    copied_sources.insert(src_canonical.clone(), (new_path.clone(), true));
                     total_bytes += bytes;
                     copied += 1;
                     let msg = format!("[OK] [SEQ] {}/{} ({} files)", folder_display, asset.name, count);
@@ -276,21 +285,21 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
         let is_image_type = &asset.opti_type == b"TPIC";
         if is_image_type && src.is_file() {
         if let Some(seq_files) = find_sequence_files(&src) {
-            let parent_name = src.parent().and_then(|p| p.file_name())
-                .unwrap_or_default().to_string_lossy();
-            let seq_subdir = target_dir.join(sanitize_folder_name(&parent_name));
-            if let Err(e) = fs::create_dir_all(&seq_subdir) {
-                errors += 1;
-                let msg = format!("[ERR] {}/{}: mkdir: {}", folder_display, asset.name, e);
-                let _ = tx.send(ProgressMsg::Asset { current: idx + 1, total, text: msg });
-                continue;
-            }
-            match copy_files(&seq_files, &seq_subdir) {
+            // If sibling sequence files are also separate assets in the project,
+            // these are individual imports, not a real sequence — skip sequence handling
+            let siblings_are_assets = seq_files.iter()
+                .filter(|f| normalize_path(f) != src_canonical)
+                .any(|f| asset_path_set.contains(&normalize_path(f)));
+            if siblings_are_assets {
+                // Fall through to single-file handling below
+            } else {
+            // Copy sequence files directly into target_dir (no extra subdirectory)
+            match copy_files(&seq_files, &target_dir) {
                 Ok((count, bytes)) => {
-                    let new_path = seq_subdir.join(src.file_name().unwrap_or_default())
+                    let new_path = target_dir.join(src.file_name().unwrap_or_default())
                         .to_string_lossy().to_string();
-                    rewrite_asset_path(&mut root, asset.id, &new_path);
-                    copied_sources.insert(src_canonical.clone(), new_path.clone());
+                    rewrite_asset_path(&mut root, asset.id, &new_path, output_dir, false, &volume_label, &server_name);
+                    copied_sources.insert(src_canonical.clone(), (new_path.clone(), false));
                     total_bytes += bytes;
                     copied += 1;
                     let msg = format!("[OK] [SEQ] {}/{} ({} files)", folder_display, asset.name, count);
@@ -313,6 +322,7 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
                 }
             }
             continue;
+            } // else (real sequence)
         }
         } // is_image_type
 
@@ -331,8 +341,8 @@ pub fn collect_project(opts: &CollectOptions, tx: &mpsc::Sender<ProgressMsg>, ca
             match copy_single_file(&src, &dst) {
                 Ok(bytes) => {
                     let new_path = dst.to_string_lossy().to_string();
-                    rewrite_asset_path(&mut root, asset.id, &new_path);
-                    copied_sources.insert(src_canonical, new_path.clone());
+                    rewrite_asset_path(&mut root, asset.id, &new_path, output_dir, false, &volume_label, &server_name);
+                    copied_sources.insert(src_canonical, (new_path.clone(), false));
                     total_bytes += bytes;
                     copied += 1;
                     let mb = bytes as f64 / (1024.0 * 1024.0);
@@ -534,13 +544,13 @@ fn get_asset_path(pin: &Chunk) -> Option<String> {
 
 // Path rewriting
 
-fn rewrite_asset_path(root: &mut Chunk, asset_id: u32, new_path: &str) {
+fn rewrite_asset_path(root: &mut Chunk, asset_id: u32, new_path: &str, aep_dir: &Path, is_folder: bool, volume: &str, host: &str) {
     if let Some(fold) = root.find_mut(b"Fold") {
-        rewrite_in_folder(fold, asset_id, new_path);
+        rewrite_in_folder(fold, asset_id, new_path, aep_dir, is_folder, volume, host);
     }
 }
 
-fn rewrite_in_folder(fold: &mut Chunk, asset_id: u32, new_path: &str) {
+fn rewrite_in_folder(fold: &mut Chunk, asset_id: u32, new_path: &str, aep_dir: &Path, is_folder: bool, volume: &str, host: &str) {
     let children = match fold.children_mut() { Some(c) => c, None => return };
     for child in children.iter_mut() {
         let name = *child.name();
@@ -549,43 +559,100 @@ fn rewrite_in_folder(fold: &mut Chunk, asset_id: u32, new_path: &str) {
                 if let Some(data) = idta.as_bytes() {
                     if data.len() >= 20 {
                         let id = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
-                        if id == asset_id { rewrite_item_path(child, new_path); return; }
+                        if id == asset_id { rewrite_item_path(child, new_path, aep_dir, is_folder, volume, host); return; }
                     }
                 }
             }
             if let Some(sfdr) = child.find_mut(b"Sfdr") {
-                rewrite_in_folder(sfdr, asset_id, new_path);
+                rewrite_in_folder(sfdr, asset_id, new_path, aep_dir, is_folder, volume, host);
             }
         } else if &name == b"Sfdr" {
-            rewrite_in_folder(child, asset_id, new_path);
+            rewrite_in_folder(child, asset_id, new_path, aep_dir, is_folder, volume, host);
         }
     }
 }
 
-fn rewrite_item_path(item: &mut Chunk, new_path: &str) {
+fn rewrite_item_path(item: &mut Chunk, new_path: &str, aep_dir: &Path, is_folder: bool, volume: &str, host: &str) {
     let pin = match item.find_mut(b"Pin ") { Some(c) => c, None => return };
     let als2 = match pin.find_mut(b"Als2") { Some(c) => c, None => return };
     let alas = match als2.find_mut(b"alas") { Some(c) => c, None => return };
     let json_str = match alas.as_str() { Some(s) => s.to_string(), None => return };
     if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-        let p = Path::new(new_path);
         json["fullpath"] = serde_json::Value::String(new_path.to_string());
-        if let Some(parent) = p.parent() {
-            if json.get("basedir").is_some() {
-                json["basedir"] = serde_json::Value::String(
-                    format!("{}\\", parent.to_string_lossy()));
-            }
-        }
-        if let Some(fname) = p.file_name() {
-            if json.get("filename").is_some() {
-                json["filename"] = serde_json::Value::String(
-                    fname.to_string_lossy().to_string());
-            }
-        }
+
+        // ascendcount_base: levels up from AEP file to common ancestor (always 1 for collected files)
+        json["ascendcount_base"] = serde_json::Value::Number(1.into());
+
+        // ascendcount_target: path components from aep_dir to the target
+        // For directories, AE adds 1 to the count
+        let target_path = Path::new(new_path);
+        let depth = target_path.strip_prefix(aep_dir)
+            .map(|rel| rel.components().count())
+            .unwrap_or(0);
+        let depth = if is_folder { depth + 1 } else { depth };
+        json["ascendcount_target"] = serde_json::Value::Number(
+            serde_json::Number::from(depth as u64));
+
+        json["target_is_folder"] = serde_json::Value::Bool(is_folder);
+        json["platform"] = serde_json::Value::Number(1.into());
+        json["server_volume_name"] = serde_json::Value::String(volume.to_string());
+        json["server_name"] = serde_json::Value::String(host.to_string());
+
         if let Ok(new_json) = serde_json::to_string(&json) {
             if let Some(s) = alas.as_str_mut() { *s = new_json; }
         }
     }
+}
+
+/// Get volume label and computer name for alas JSON (Windows only).
+#[cfg(windows)]
+fn get_volume_and_host(path: &Path) -> (String, String) {
+    let volume = get_volume_label(path);
+    let host = std::env::var("COMPUTERNAME").unwrap_or_default();
+    (volume, host)
+}
+
+#[cfg(windows)]
+fn get_volume_label(path: &Path) -> String {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    // Extract drive root like "E:\"
+    let path_str = path.to_string_lossy();
+    let root = if path_str.len() >= 3 && path_str.as_bytes()[1] == b':' {
+        format!("{}\\", &path_str[..2])
+    } else {
+        return String::new();
+    };
+
+    extern "system" {
+        fn GetVolumeInformationW(
+            root: *const u16, name_buf: *mut u16, name_size: u32,
+            serial: *mut u32, max_comp: *mut u32, flags: *mut u32,
+            fs_buf: *mut u16, fs_size: u32,
+        ) -> i32;
+    }
+
+    let root_w: Vec<u16> = OsStr::new(&root).encode_wide().chain(Some(0)).collect();
+    let mut name_buf = [0u16; 256];
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root_w.as_ptr(), name_buf.as_mut_ptr(), 256,
+            std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+            std::ptr::null_mut(), 0,
+        )
+    };
+    if ok != 0 {
+        let end = name_buf.iter().position(|&c| c == 0).unwrap_or(name_buf.len());
+        String::from_utf16_lossy(&name_buf[..end])
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(not(windows))]
+fn get_volume_and_host(_path: &Path) -> (String, String) {
+    (String::new(), String::new())
 }
 
 // File operations
