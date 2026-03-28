@@ -32,6 +32,12 @@ from ._project_fields import (
     set_project_compensate_scene_referred,
     set_project_linearize_working_space, set_project_working_gamma,
 )
+from ._layers import (
+    add_solid_layer, add_null_layer, add_adjustment_layer,
+    add_shape_layer, add_text_layer, add_camera_layer, add_light_layer,
+    add_precomp_layer, precompose_layers,
+    remove_layer, duplicate_layer, move_layer,
+)
 
 __all__ = [
     "save_aep", "serialize_chunk_tree",
@@ -52,4 +58,7 @@ __all__ = [
     "set_project_audio_sample_rate", "set_project_bits_per_channel",
     "set_project_compensate_scene_referred",
     "set_project_linearize_working_space", "set_project_working_gamma",
+    "add_solid_layer", "add_null_layer", "add_adjustment_layer",
+    "add_shape_layer", "add_text_layer", "add_camera_layer", "add_light_layer",
+    "remove_layer", "duplicate_layer", "move_layer",
 ]
