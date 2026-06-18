@@ -46,6 +46,42 @@ def parse_aep(data: bytes):
         raise AepParseError(f"Failed to parse AEP data: {e}") from e
 
 
+def parse_aep_settings(data: bytes):
+    """Parse only project-level settings from a binary .aep file.
+
+    Reads color management, bit depth, working gamma, frame rate, audio sample
+    rate, expression engine, GPU accel, etc. WITHOUT materializing the comp /
+    layer / asset tree. Dramatically lower memory and faster than
+    :func:`parse_aep` for large projects — use it when you only need
+    project settings (e.g. the working color space).
+
+    Args:
+        data: Raw bytes of the .aep file.
+
+    Returns:
+        A ``models.Project`` with only the project-level settings populated
+        (``compositions``/``assets`` are empty).
+
+    Raises:
+        AepParseError: If the file is malformed or truncated.
+    """
+    from .models import Project
+    from ._parser._shallow import scan_top_level
+
+    if not data or len(data) < 12:
+        raise AepParseError("File is too small to be a valid AEP file.")
+    try:
+        cl, big_endian = scan_top_level(data)
+        pp = ProjectParser(big_endian=big_endian)
+        project = Project()
+        pp._parse_project_settings(cl, project)
+        return project
+    except AepParseError:
+        raise
+    except Exception as e:
+        raise AepParseError(f"Failed to parse AEP settings: {e}") from e
+
+
 def parse_aepx(xml_string: str):
     """Parse an .aepx XML string.
 

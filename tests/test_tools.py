@@ -895,6 +895,28 @@ class TestProject:
         proj = load_project(pm)
         assert "Project" in repr(proj)
 
+    def test_project_color_management_ocio(self):
+        pm = _make_project_model()
+        pm.color_management_settings = {"ocioConfigurationFile": "ACES 1.2"}
+        proj = load_project(pm)
+        assert proj.color_management_settings == {"ocioConfigurationFile": "ACES 1.2"}
+        assert proj.ocio_config == "ACES 1.2"
+        assert proj.color_space == "ACES 1.2"
+
+    def test_project_color_management_classic_srgb(self):
+        pm = _make_project_model()
+        pm.working_color_space = {
+            "baseColorProfile": {"colorProfileName": "sRGB IEC61966-2.1"}}
+        proj = load_project(pm)
+        assert proj.working_color_space_name == "sRGB IEC61966-2.1"
+        assert proj.color_space == "sRGB IEC61966-2.1"
+
+    def test_project_color_management_default_none(self):
+        proj = load_project(_make_project_model())
+        assert proj.color_management_settings == {}
+        assert proj.ocio_config == ""
+        assert proj.color_space == "None"
+
 
 # Layer parent lookup
 

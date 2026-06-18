@@ -756,6 +756,40 @@ class Project:
     linearize_working_space: bool = False
     compensate_scene_referred: bool = False
     transparency_grid_thumbnails: bool = False
+    # Color management JSON blobs (empty dict = not color-managed / default).
+    # color_management_settings comes from the `pcms` chunk and holds the OCIO
+    # config, e.g. {"ocioConfigurationFile": "ACES 1.2"}. working_color_space
+    # (`PwCs`) and display_color_space (`pdvc`) hold the legacy ICC working /
+    # display space when OCIO is not in use.
+    color_management_settings: dict = field(default_factory=dict)
+    working_color_space: dict = field(default_factory=dict)
+    display_color_space: dict = field(default_factory=dict)
+
+    @property
+    def ocio_config(self) -> str:
+        """The OCIO configuration name (e.g. "ACES 1.2"), or "" if not set."""
+        return self.color_management_settings.get("ocioConfigurationFile", "")
+
+    @property
+    def working_color_space_name(self) -> str:
+        """Classic (ICC) working color space name, e.g. "sRGB IEC61966-2.1".
+
+        Empty when OCIO is in use or no working space is assigned.
+        """
+        base = self.working_color_space.get("baseColorProfile")
+        if isinstance(base, dict):
+            return base.get("colorProfileName", "")
+        return ""
+
+    @property
+    def color_space(self) -> str:
+        """Human-readable project working color space.
+
+        Returns the OCIO config (e.g. "ACES 1.2") when color-managed via OCIO,
+        otherwise the classic ICC working space name (e.g. "sRGB IEC61966-2.1"),
+        otherwise "None" when the project is not color-managed.
+        """
+        return self.ocio_config or self.working_color_space_name or "None"
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -786,6 +820,11 @@ class Project:
             settings["compensateSceneReferred"] = True
         if self.transparency_grid_thumbnails:
             settings["transparencyGridThumbnails"] = True
+        # Resolved color space name (skip "None" / the raw base64 ICC blobs).
+        if self.color_space != "None":
+            settings["colorSpace"] = self.color_space
+        if self.color_management_settings:
+            settings["colorManagementSettings"] = self.color_management_settings
         if settings:
             d["settings"] = settings
         if self.render_queue:

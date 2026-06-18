@@ -710,6 +710,40 @@ class Project:
         self._model.compensate_scene_referred = value
         self._write_project_setting('set_project_compensate_scene_referred', value)
 
+    # Color management (read-only). The values are the JSON blobs After Effects
+    # stores in the pcms / PwCs / pdvc chunks.
+    @property
+    def color_management_settings(self) -> dict:
+        """OCIO / color-management settings (`pcms`), e.g.
+        {"ocioConfigurationFile": "ACES 1.2"}. Empty dict = not color-managed."""
+        return self._model.color_management_settings
+
+    @property
+    def working_color_space(self) -> dict:
+        """Legacy ICC working color space (`PwCs`). Empty when OCIO is in use."""
+        return self._model.working_color_space
+
+    @property
+    def display_color_space(self) -> dict:
+        """Display / viewer color space (`pdvc`)."""
+        return self._model.display_color_space
+
+    @property
+    def ocio_config(self) -> str:
+        """OCIO configuration name (e.g. "ACES 1.2"), or "" if not set."""
+        return self._model.ocio_config
+
+    @property
+    def working_color_space_name(self) -> str:
+        """Classic ICC working space name (e.g. "sRGB IEC61966-2.1"), or ""."""
+        return self._model.working_color_space_name
+
+    @property
+    def color_space(self) -> str:
+        """Human-readable working color space: OCIO config, classic ICC space,
+        or "None" when the project is not color-managed."""
+        return self._model.color_space
+
     def __repr__(self) -> str:
         return f"Project(file={self._file!r}, num_comps={len(self._model.compositions)})"
 

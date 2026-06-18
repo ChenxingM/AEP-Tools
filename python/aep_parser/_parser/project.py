@@ -142,6 +142,32 @@ class ProjectParser(PropertyParserMixin, EffectParserMixin):
             if utf8 is not None and isinstance(utf8.data, str):
                 project.gpu_accel_type = _GPU_UUIDS.get(utf8.data, utf8.data)
 
+        # Color management: each key chunk (pcms/PwCs/pdvc) is immediately
+        # followed by a sibling Utf8 chunk holding a JSON string.
+        project.color_management_settings = self._json_after_key(cl, "pcms")
+        project.working_color_space = self._json_after_key(cl, "PwCs")
+        project.display_color_space = self._json_after_key(cl, "pdvc")
+
+    @staticmethod
+    def _json_after_key(cl: ChunkList, key: str) -> dict:
+        """Return the JSON dict from the Utf8 chunk immediately following *key*."""
+        children = cl.children
+        for i, c in enumerate(children):
+            if c.name != key:
+                continue
+            nxt = children[i + 1] if i + 1 < len(children) else None
+            if nxt is None or nxt.name != "Utf8" or not isinstance(nxt.data, str):
+                return {}
+            text = nxt.data.strip().rstrip("\x00").strip()
+            if not text:
+                return {}
+            try:
+                value = json.loads(text)
+            except (ValueError, json.JSONDecodeError):
+                return {}
+            return value if isinstance(value, dict) else {}
+        return {}
+
     # Render Queue
 
     def _parse_render_queue(self, lrdr_chunk: Chunk, project: Project) -> None:
@@ -385,7 +411,9 @@ class ProjectParser(PropertyParserMixin, EffectParserMixin):
             color.r = self._solid_color_val(odr.read_float32())
             color.g = self._solid_color_val(odr.read_float32())
             color.b = self._solid_color_val(odr.read_float32())
-            solid_name = odr.read_nul_string("utf-8", 256)
+            # The name field is the rest of the chunk; older/shorter opti
+            # chunks have fewer than 256 bytes here, so clamp to what remains.
+            solid_name = odr.read_nul_string("utf-8", min(256, odr.remaining()))
             asset = SolidAsset(id=asset_id, name=solid_name, color=color,
                                width=width, height=height)
         else:
@@ -601,7 +629,10 @@ class ProjectParser(PropertyParserMixin, EffectParserMixin):
         r.skip(3)
         layer.light_type = r.read_uint(1)
         r.skip(20)
-        layer.matte_id = r.read_uint(4)
+        # matte_id is the trailing 4-byte field of the newer 164-byte ldta
+        # layout; older AE versions write a 160-byte ldta without it.
+        if r.remaining() >= 4:
+            layer.matte_id = r.read_uint(4)
 
         layer.is_guide = flags.get_bit(1, 1)
         layer.frame_blending_type = 1 if flags.get_bit(1, 2) else 0
